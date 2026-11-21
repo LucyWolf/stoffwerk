@@ -1,0 +1,107 @@
+# Baut bei jedem Tag v* die Programmdateien und hängt sie an ein Release:
+#   stoffwerk-linux   Linux, ein einziges Programm
+#   Stoffwerk.exe     Windows, ein einziges Programm
+# Danach macht installer.yml daraus die Doppelklick-Dateien und die setup.exe.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  linux:
+    # Auf der älteren Ubuntu bauen: ein Programm, das gegen eine alte glibc
+    # gebaut ist, läuft auch auf neueren Systemen - umgekehrt nicht.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      # Die Versionsnummer steht in Cargo.toml. Weicht der Tag ab, stimmt die
+      # Anzeige im Programm nicht mit dem Release überein.
+      - name: Version gegen den Tag prüfen
+        run: |
+          VER=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "Cargo.toml=$VER  Tag=${GITHUB_REF_NAME#v}"
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "$VER" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::Cargo.toml ($VER) passt nicht zum Tag ($GITHUB_REF_NAME)"; exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --release
+      - name: Bauen
+        run: cargo build --release
+      - name: Fertiges Programm prüfen
+        run: |
+          ./target/release/stoffwerk --version
+          cp target/release/stoffwerk stoffwerk-linux
+          ls -lh stoffwerk-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          retention-days: 7
+          path: stoffwerk-linux
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Bauen
+        run: cargo build --release
+      # Ohne Konsole gibt es keine Ausgabe - gewertet wird die Rückgabe
+      - name: Fertiges Programm prüfen
+        shell: pwsh
+        run: |
+          $p = Start-Process target\release\stoffwerk.exe -ArgumentList "--version" -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "--version endete mit $($p.ExitCode)" }
+          Copy-Item target\release\stoffwerk.exe Stoffwerk.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          retention-days: 7
+          path: Stoffwerk.exe
+
+  release:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Release-Text aus dem passenden Abschnitt in CHANGELOG.md
+      - name: Notizen aus dem Changelog
+        run: |
+          VER=${GITHUB_REF_NAME#v}
+          awk -v v="$VER" '/^## /{p = ($2 == v || $2 == "v"v)} p' CHANGELOG.md | tail -n +2 > notizen.md
+          [ -s notizen.md ] || echo "Siehe CHANGELOG.md" > notizen.md
+      - uses: actions/download-artifact@v4
+        with:
+          path: anhaenge
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Stoffwerk ${{ github.ref_name }}
+          body_path: notizen.md
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          files: |
+            anhaenge/linux/*
+            anhaenge/windows/*
+
+  # Ein Release, das der Workflow selbst anlegt, löst keine weiteren Workflows
+  # aus - deshalb hier direkt aufrufen.
+  doppelklick:
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/installer.yml
+    with:
+      tag: ${{ github.ref_name }}
+    permissions:
+      contents: write
