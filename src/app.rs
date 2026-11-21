@@ -61,7 +61,7 @@ impl StoffwerkApp {
     fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
             .set_title("Avatar laden")
-            .add_filter("Avatar (VRM, glTF, OBJ)", &["vrm", "glb", "gltf", "obj"])
+            .add_filter("Avatar (FBX, VRM, glTF, OBJ)", &["fbx", "vrm", "glb", "gltf", "obj"])
             .add_filter("Alle Dateien", &["*"])
             .pick_file();
         if let Some(path) = picked {
@@ -119,7 +119,7 @@ impl StoffwerkApp {
                     ));
                 }
                 None => {
-                    ui.label(RichText::new("Kein Avatar geladen – Datei → Avatar laden oder Datei ins Fenster ziehen").weak());
+                    ui.label(RichText::new("Kein Avatar geladen – Datei > Avatar laden oder Datei ins Fenster ziehen").weak());
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

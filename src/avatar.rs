@@ -1,7 +1,7 @@
 //! Avatar laden: glTF/GLB/VRM (VRM ist intern glTF) und OBJ.
 //! Ergebnis ist ein einzelnes Dreiecksnetz in Metern, Y nach oben.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use glam::{Mat4, Vec3};
 use std::path::Path;
 
@@ -41,11 +41,8 @@ pub fn load(path: &Path) -> Result<AvatarMesh> {
     let mut mesh = match ext.as_str() {
         "gltf" | "glb" | "vrm" => load_gltf(path)?,
         "obj" => load_obj(path)?,
-        "fbx" => bail!(
-            "FBX kann Stoffwerk noch nicht lesen. Bitte den Avatar als .vrm, .glb oder .obj \
-             exportieren (in Blender: Datei → Exportieren → glTF 2.0)."
-        ),
-        _ => bail!("Unbekanntes Dateiformat „.{ext}“. Erlaubt sind .vrm, .glb, .gltf und .obj."),
+        "fbx" => load_fbx(path)?,
+        _ => bail!("Unbekanntes Dateiformat „.{ext}“. Erlaubt sind .fbx, .vrm, .glb, .gltf und .obj."),
     };
     if mesh.indices.is_empty() {
         bail!("In der Datei wurde kein Netz gefunden.");
@@ -132,6 +129,60 @@ fn visit_node(node: &gltf::Node, parent: Mat4, buffers: &[gltf::buffer::Data], o
     for child in node.children() {
         visit_node(&child, world, buffers, out);
     }
+}
+
+/// FBX über ufbx. ufbx rechnet Achsen und Einheiten gleich ins Netz um:
+/// Unity- und Blender-FBX haben oft Z oben oder Zentimeter, hier kommt immer Y oben in Metern an.
+fn load_fbx(path: &Path) -> Result<AvatarMesh> {
+    let opts = ufbx::LoadOpts {
+        target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
+        target_unit_meters: 1.0,
+        space_conversion: ufbx::SpaceConversion::ModifyGeometry,
+        generate_missing_normals: true,
+        ..Default::default()
+    };
+    let file = path.to_str().context("Der Dateipfad enthält Zeichen, die nicht gelesen werden können.")?;
+    let scene = ufbx::load_file(file, opts)
+        .map_err(|e| anyhow!("FBX konnte nicht gelesen werden: {}", e.description))?;
+
+    let mut out = empty();
+    for node in scene.nodes.iter() {
+        let Some(mesh) = node.mesh.as_ref() else { continue };
+        let xf = &node.geometry_to_world;
+        let nxf = ufbx::matrix_for_normals(xf);
+        let mut tri = vec![0u32; mesh.max_face_triangles * 3];
+
+        for (fi, face) in mesh.faces.iter().enumerate() {
+            let n = mesh.triangulate_face(&mut tri, *face) as usize;
+            let color = mesh
+                .face_material
+                .get(fi)
+                .and_then(|&m| mesh.materials.get(m as usize))
+                .map(|m| {
+                    let c = m.fbx.diffuse_color.value_vec4;
+                    let f = if m.fbx.diffuse_color.has_value { [c.x, c.y, c.z] } else { [1.0; 3] };
+                    // Viele Avatare haben Weiß + Textur; dunkle Grundfarben sind meist Absicht (Haare, Kleidung)
+                    [SKIN_GRAY[0] * f[0] as f32, SKIN_GRAY[1] * f[1] as f32, SKIN_GRAY[2] * f[2] as f32]
+                })
+                .unwrap_or(SKIN_GRAY);
+
+            for &ix in &tri[..n * 3] {
+                let ix = ix as usize;
+                let p = ufbx::transform_position(xf, mesh.vertex_position[ix]);
+                let nrm = if mesh.vertex_normal.exists {
+                    let v = ufbx::transform_direction(&nxf, mesh.vertex_normal[ix]);
+                    Vec3::new(v.x as f32, v.y as f32, v.z as f32).normalize_or_zero()
+                } else {
+                    Vec3::ZERO
+                };
+                out.indices.push(out.positions.len() as u32);
+                out.positions.push(Vec3::new(p.x as f32, p.y as f32, p.z as f32));
+                out.normals.push(nrm);
+                out.colors.push(color);
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn load_obj(path: &Path) -> Result<AvatarMesh> {

@@ -27,14 +27,12 @@ Gebraucht wird eine Grafikkarte mit Vulkan (Linux) bzw. DirectX 12 oder Vulkan (
 
 | | |
 |---|---|
-| Avatar laden | Datei → Avatar laden, oder Datei ins Fenster ziehen (VRM, GLB, glTF, OBJ) |
+| Avatar laden | Datei → Avatar laden, oder Datei ins Fenster ziehen (FBX, VRM, GLB, glTF, OBJ) |
 | 3D drehen | linke Maustaste ziehen |
 | 3D verschieben | rechte oder mittlere Maustaste ziehen |
 | Zoomen | Mausrad |
 | Auf Avatar ausrichten | Doppelklick in die 3D-Ansicht |
 | Schnittfläche verschieben | rechte/mittlere Maustaste, oder Leertaste + linke |
-
-FBX kann Stoffwerk noch nicht lesen. In Blender: Datei → Exportieren → glTF 2.0 (.glb).
 
 ## Selbst bauen
 

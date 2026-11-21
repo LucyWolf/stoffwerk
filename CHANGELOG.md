@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.1
+
+**FBX-Avatare laden**
+- FBX-Dateien öffnen jetzt direkt, so wie man es von Marvelous Designer kennt. Vorher kam nur ein Hinweis, die Datei erst umzuwandeln.
+- Achsen und Einheiten werden beim Laden angeglichen: Exporte aus Blender oder 3ds Max haben oft Z oben und Zentimeter, im Programm steht der Avatar trotzdem aufrecht und in echter Größe. Sonst läge er auf dem Rücken und die Stoffsimulation wäre später um den Faktor 100 falsch skaliert.
+- Gelesen wird mit ufbx, das Binär- und Text-FBX ab Version 6 versteht.
+
+**Kleinigkeiten**
+- Im Fehlerfenster und in der Statusleiste standen Kästchen statt Pfeilen; die eingebaute Schrift hat das Zeichen nicht.
+
+**Nicht geprüft**
+- Getestet mit einer selbst gebauten Text-FBX (Z oben, Zentimeter). Mit einem echten VRChat-Avatar als Binär-FBX noch nicht.
+
 ## 0.1.0
 
 Erster Stand (Abschnitt 1 von 5): das Grundgerüst, auf dem Schnitt, Simulation und Export aufbauen.

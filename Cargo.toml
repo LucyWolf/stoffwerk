@@ -1,6 +1,6 @@
 [package]
 name = "stoffwerk"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Kleidung für VRChat-Avatare: Schnittmuster zeichnen, nähen, simulieren, exportieren"
 license = "MIT"
@@ -11,6 +11,7 @@ glam = { version = "0.34", features = ["bytemuck"] }
 bytemuck = { version = "1", features = ["derive"] }
 gltf = { version = "1.4", features = ["KHR_materials_unlit", "extras", "names", "utils", "import"] }
 tobj = "4"
+ufbx = "0.11"
 rfd = "0.18"
 anyhow = "1"
 log = "0.4"
