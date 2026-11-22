@@ -17,6 +17,25 @@ pub enum Icon {
     Split,
     Undo,
     Redo,
+    // 3D-Fenster
+    ViewFront,
+    ViewBack,
+    ViewLeft,
+    ViewRight,
+    ViewTop,
+    Frame,
+    Person,
+    Textures,
+    Floor,
+    Shadow,
+    Camera,
+    // 2D-Anzeige
+    Names,
+    Ruler,
+    // Fensteraufteilung
+    LayoutBoth,
+    Layout3D,
+    Layout2D,
 }
 
 const SIZE: f32 = 26.0;
@@ -125,6 +144,109 @@ fn draw(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
             poly(&[(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)], true, s);
             line((0.05, 0.5), (0.95, 0.5), s);
         }
+        Icon::ViewFront | Icon::ViewBack | Icon::ViewLeft | Icon::ViewRight | Icon::ViewTop => {
+            // Würfel schräg von vorn; die gemeinte Seite ist ausgefüllt
+            let front = [(0.1, 0.35), (0.65, 0.35), (0.65, 0.95), (0.1, 0.95)];
+            let top = [(0.1, 0.35), (0.35, 0.05), (0.9, 0.05), (0.65, 0.35)];
+            let right = [(0.65, 0.35), (0.9, 0.05), (0.9, 0.65), (0.65, 0.95)];
+            let fill = |pts: &[(f32, f32)]| {
+                let v: Vec<Pos2> = pts.iter().map(|&(x, y)| at(x, y)).collect();
+                p.add(Shape::convex_polygon(v, accent, Stroke::NONE));
+            };
+            match icon {
+                Icon::ViewFront => fill(&front),
+                Icon::ViewTop => fill(&top),
+                Icon::ViewRight => fill(&right),
+                _ => {}
+            }
+            poly(&front, true, thin);
+            poly(&top, true, thin);
+            poly(&right, true, thin);
+            match icon {
+                // Rückseite und linke Seite sieht man nicht: gestrichelt angedeutet
+                Icon::ViewBack => {
+                    for k in 0..4 {
+                        let t = k as f32 / 4.0;
+                        line((0.35 + 0.55 * t, 0.65), (0.35 + 0.55 * (t + 0.12), 0.65), Stroke::new(1.6, accent));
+                    }
+                    line((0.35, 0.05), (0.35, 0.65), Stroke::new(1.6, accent));
+                }
+                Icon::ViewLeft => {
+                    line((0.1, 0.35), (0.1, 0.95), Stroke::new(2.4, accent));
+                    line((0.35, 0.05), (0.35, 0.65), Stroke::new(1.0, accent));
+                    line((0.1, 0.95), (0.35, 0.65), Stroke::new(1.0, accent));
+                }
+                _ => {}
+            }
+        }
+        Icon::Frame => {
+            for (x, y, dx, dy) in [(0.0, 0.0, 1.0, 1.0), (1.0, 0.0, -1.0, 1.0), (0.0, 1.0, 1.0, -1.0), (1.0, 1.0, -1.0, -1.0)] {
+                line((x, y), (x + 0.3 * dx, y), s);
+                line((x, y), (x, y + 0.3 * dy), s);
+            }
+            person(p, &at, c, 0.5, 0.18, 0.6);
+        }
+        Icon::Person => person(p, &at, c, 0.5, 0.02, 1.0),
+        Icon::Textures => {
+            for i in 0..3 {
+                for j in 0..3 {
+                    let r0 = Rect::from_min_max(at(i as f32 / 3.0, j as f32 / 3.0), at((i + 1) as f32 / 3.0, (j + 1) as f32 / 3.0));
+                    if (i + j) % 2 == 0 {
+                        p.rect_filled(r0, 0.0, c);
+                    }
+                }
+            }
+            poly(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], true, thin);
+        }
+        Icon::Floor => {
+            let q = |x: f32, z: f32| (0.5 + (x - z) * 0.5, 0.55 + (x + z) * 0.22);
+            for k in 0..4 {
+                let t = -0.75 + k as f32 * 0.5;
+                line(q(t, -0.75), q(t, 0.75), thin);
+                line(q(-0.75, t), q(0.75, t), thin);
+            }
+        }
+        Icon::Shadow => {
+            let e: Vec<Pos2> = (0..=24)
+                .map(|i| {
+                    let a = i as f32 / 24.0 * std::f32::consts::TAU;
+                    at(0.45 + 0.45 * a.cos(), 0.85 + 0.12 * a.sin())
+                })
+                .collect();
+            p.add(Shape::convex_polygon(e, Color32::from_gray(90), Stroke::NONE));
+            person(p, &at, c, 0.6, 0.0, 0.85);
+        }
+        Icon::Camera => {
+            poly(&[(0.0, 0.3), (1.0, 0.3), (1.0, 0.95), (0.0, 0.95)], true, s);
+            poly(&[(0.3, 0.3), (0.38, 0.12), (0.62, 0.12), (0.7, 0.3)], false, s);
+            p.circle_stroke(at(0.5, 0.62), r.width() * 0.2, s);
+        }
+        Icon::Names => {
+            p.text(r.center(), egui::Align2::CENTER_CENTER, "Aa", egui::FontId::proportional(r.height() * 0.85), c);
+        }
+        Icon::Ruler => {
+            poly(&[(0.0, 0.6), (1.0, 0.1), (1.0, 0.4), (0.0, 0.9)], true, s);
+            for k in 1..5 {
+                let t = k as f32 / 5.0;
+                let (x, y) = (t, 0.6 - 0.5 * t);
+                let len = if k % 2 == 0 { 0.2 } else { 0.12 };
+                line((x, y), (x, y + len), thin);
+            }
+        }
+        Icon::LayoutBoth | Icon::Layout3D | Icon::Layout2D => {
+            poly(&[(0.0, 0.1), (1.0, 0.1), (1.0, 0.9), (0.0, 0.9)], true, s);
+            match icon {
+                Icon::LayoutBoth => {
+                    line((0.5, 0.1), (0.5, 0.9), s);
+                }
+                Icon::Layout3D => {
+                    p.text(r.center(), egui::Align2::CENTER_CENTER, "3D", egui::FontId::proportional(r.height() * 0.5), c);
+                }
+                _ => {
+                    p.text(r.center(), egui::Align2::CENTER_CENTER, "2D", egui::FontId::proportional(r.height() * 0.5), c);
+                }
+            }
+        }
         Icon::Undo | Icon::Redo => {
             // Bogen mit Pfeilspitze; Wiederholen ist gespiegelt
             let flip = icon == Icon::Redo;
@@ -141,4 +263,15 @@ fn draw(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
             line(tip, (fx(0.32), 0.48), s);
         }
     }
+}
+
+/// Strichmännchen: Kopf, Körper, Arme, Beine; x = Mitte, y = oben, k = Höhe (0..1)
+fn person(p: &egui::Painter, at: &dyn Fn(f32, f32) -> Pos2, c: Color32, x: f32, y: f32, k: f32) {
+    let s = Stroke::new(1.5, c);
+    let pt = |dx: f32, dy: f32| at(x + dx * k, y + dy * k);
+    p.circle_filled(pt(0.0, 0.12), 0.12 * k * 16.0, c);
+    p.line_segment([pt(0.0, 0.26), pt(0.0, 0.62)], s);
+    p.line_segment([pt(-0.28, 0.42), pt(0.28, 0.42)], s);
+    p.line_segment([pt(0.0, 0.62), pt(-0.18, 0.98)], s);
+    p.line_segment([pt(0.0, 0.62), pt(0.18, 0.98)], s);
 }

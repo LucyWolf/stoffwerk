@@ -25,6 +25,22 @@ struct Vertex {
 struct Globals {
     view_proj: [[f32; 4]; 4],
     eye: [f32; 4],
+    opts: [f32; 4],
+}
+
+/// Was die 3D-Ansicht zeigt (Schalter in der Leiste)
+#[derive(Clone, Copy)]
+pub struct Display {
+    pub avatar: bool,
+    pub textures: bool,
+    pub floor: bool,
+    pub shadow: bool,
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self { avatar: true, textures: true, floor: true, shadow: true }
+    }
 }
 
 struct GpuPart {
@@ -50,6 +66,8 @@ struct Target {
 
 pub struct Viewport3D {
     lit: wgpu::RenderPipeline,
+    background: wgpu::RenderPipeline,
+    shadow: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -185,6 +203,67 @@ impl Viewport3D {
             false,
         );
 
+        let background = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("background"),
+            layout: Some(&line_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_bg"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_bg"),
+                targets: &[Some(wgpu::ColorTargetState { format: COLOR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+            multiview_mask: None,
+            cache: None,
+        });
+        // Schatten: Tiefe schreiben und „kleiner“ vergleichen. Alle Schattenpixel liegen auf derselben Höhe,
+        // so wird jeder Bildpunkt nur einmal abgedunkelt, auch wo sich Arme und Körper überdecken.
+        let shadow = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&line_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_shadow"),
+                buffers: &[Some(vertex_layout.clone())],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_shadow"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+            multiview_mask: None,
+            cache: None,
+        });
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("tex"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -223,6 +302,8 @@ impl Viewport3D {
 
         Self {
             lit,
+            background,
+            shadow,
             lines,
             globals,
             bind_group,
@@ -297,17 +378,17 @@ impl Viewport3D {
     }
 
     /// Zeichnet die Szene in der gewünschten Größe (in echten Bildpunkten) und gibt die egui-Textur zurück.
-    pub fn render(&mut self, rs: &egui_wgpu::RenderState, size: [u32; 2], camera: &OrbitCamera, show_avatar: bool) -> egui::TextureId {
+    pub fn render(&mut self, rs: &egui_wgpu::RenderState, size: [u32; 2], camera: &OrbitCamera, display: Display) -> egui::TextureId {
         let size = [size[0].clamp(1, 8192), size[1].clamp(1, 8192)];
         self.ensure_target(rs, size);
         let mut encoder = rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("3d") });
-        self.encode(rs, &mut encoder, camera, show_avatar);
+        self.encode(rs, &mut encoder, camera, display);
         rs.queue.submit([encoder.finish()]);
         self.target.as_ref().expect("Ziel angelegt").egui_id
     }
 
     /// Bildschirmfoto der 3D-Ansicht in der angegebenen Größe
-    pub fn screenshot(&mut self, rs: &egui_wgpu::RenderState, size: [u32; 2], camera: &OrbitCamera, show_avatar: bool) -> image::RgbaImage {
+    pub fn screenshot(&mut self, rs: &egui_wgpu::RenderState, size: [u32; 2], camera: &OrbitCamera, display: Display) -> image::RgbaImage {
         let size = [size[0].clamp(16, 8192), size[1].clamp(16, 8192)];
         self.ensure_target(rs, size);
         let row = (size[0] * 4).div_ceil(256) * 256;
@@ -318,7 +399,7 @@ impl Viewport3D {
             mapped_at_creation: false,
         });
         let mut encoder = rs.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shot") });
-        self.encode(rs, &mut encoder, camera, show_avatar);
+        self.encode(rs, &mut encoder, camera, display);
         let target = self.target.as_ref().expect("Ziel angelegt");
         encoder.copy_texture_to_buffer(
             target.resolve_tex.as_image_copy(),
@@ -343,12 +424,13 @@ impl Viewport3D {
         image::RgbaImage::from_raw(size[0], size[1], px).expect("Größe passt")
     }
 
-    fn encode(&self, rs: &egui_wgpu::RenderState, encoder: &mut wgpu::CommandEncoder, camera: &OrbitCamera, show_avatar: bool) {
+    fn encode(&self, rs: &egui_wgpu::RenderState, encoder: &mut wgpu::CommandEncoder, camera: &OrbitCamera, display: Display) {
         let target = self.target.as_ref().expect("Ziel angelegt");
         let aspect = target.size[0] as f32 / target.size[1] as f32;
         let globals = Globals {
             view_proj: (camera.proj(aspect) * camera.view()).to_cols_array_2d(),
             eye: camera.eye().extend(1.0).to_array(),
+            opts: [if display.textures { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
         };
         rs.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
 
@@ -368,8 +450,25 @@ impl Viewport3D {
             ..Default::default()
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.background);
+        pass.draw(0..3, 0..1);
+        // Boden vor dem Schatten: das Raster bleibt im Schatten sichtbar, nur dunkler
+        if display.floor {
+            pass.set_pipeline(&self.lines);
+            pass.set_vertex_buffer(0, self.grid.slice(..));
+            pass.draw(0..self.grid_count, 0..1);
+        }
 
-        if let Some(avatar) = self.avatar.as_ref().filter(|_| show_avatar) {
+        let avatar = self.avatar.as_ref().filter(|_| display.avatar);
+        if let (Some(avatar), true) = (avatar, display.shadow) {
+            pass.set_pipeline(&self.shadow);
+            pass.set_vertex_buffer(0, avatar.vertices.slice(..));
+            pass.set_index_buffer(avatar.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for part in &avatar.parts {
+                pass.draw_indexed(part.first..part.first + part.count, 0, 0..1);
+            }
+        }
+        if let Some(avatar) = avatar {
             pass.set_pipeline(&self.lit);
             pass.set_vertex_buffer(0, avatar.vertices.slice(..));
             pass.set_index_buffer(avatar.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -379,9 +478,6 @@ impl Viewport3D {
             }
         }
 
-        pass.set_pipeline(&self.lines);
-        pass.set_vertex_buffer(0, self.grid.slice(..));
-        pass.draw(0..self.grid_count, 0..1);
     }
 
     fn ensure_target(&mut self, rs: &egui_wgpu::RenderState, size: [u32; 2]) {
@@ -463,11 +559,11 @@ fn grid_vertices() -> Vec<Vertex> {
         let t = i as f32 * step;
         let e = half as f32 * step;
         let (cx, cz) = if i == 0 {
-            ([0.75, 0.25, 0.25], [0.25, 0.35, 0.8])
+            ([0.75, 0.3, 0.3], [0.3, 0.4, 0.8])
         } else if i % 10 == 0 {
-            ([0.38; 3], [0.38; 3])
+            ([0.55; 3], [0.55; 3])
         } else {
-            ([0.2; 3], [0.2; 3])
+            ([0.42; 3], [0.42; 3])
         };
         // Linie parallel zur X-Achse (bei z = t); die Mittellinie ist die X-Achse, rot
         v.push(Vertex { pos: [-e, 0.0, t], normal: n, color: cx, uv });

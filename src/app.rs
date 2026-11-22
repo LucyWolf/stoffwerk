@@ -1,7 +1,9 @@
 use crate::camera::OrbitCamera;
 use crate::import::{self, AvatarMesh, ImportOptions, Unit};
 use crate::schnitt::{self, Doc, Editor, editor::Sel};
-use crate::viewport::Viewport3D;
+use crate::schnitt::editor::Tool;
+use crate::schnitt::icons::{self, Icon};
+use crate::viewport::{Display, Viewport3D};
 use eframe::egui::{self, Color32, RichText, Sense};
 use eframe::egui_wgpu;
 use std::path::{Path, PathBuf};
@@ -12,6 +14,14 @@ struct Loading {
     path: PathBuf,
     opts: ImportOptions,
     rx: Receiver<anyhow::Result<AvatarMesh>>,
+}
+
+/// Fensteraufteilung (Knöpfe rechts in der Statusleiste)
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    Both,
+    Only3D,
+    Only2D,
 }
 
 /// Was nach der Rückfrage „ungespeicherte Änderungen“ passieren soll
@@ -37,7 +47,8 @@ pub struct StoffwerkApp {
     import_opts: ImportOptions,
     /// Offenes Import-Fenster: Datei und Einstellungen
     import_dialog: Option<(PathBuf, ImportOptions)>,
-    avatar_visible: bool,
+    display: Display,
+    layout: Layout,
     avatar_selected: bool,
     loading: Option<Loading>,
     error: Option<String>,
@@ -74,7 +85,8 @@ impl StoffwerkApp {
             avatar_opts: ImportOptions::default(),
             import_opts: ImportOptions::default(),
             import_dialog: None,
-            avatar_visible: true,
+            display: Display::default(),
+            layout: Layout::Both,
             avatar_selected: false,
             loading: None,
             error: None,
@@ -136,7 +148,7 @@ impl StoffwerkApp {
                 }
                 self.avatar_opts = opts;
                 self.avatar_path = Some(path);
-                self.avatar_visible = true;
+                self.display.avatar = true;
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
@@ -256,7 +268,7 @@ impl StoffwerkApp {
     fn save_screenshot(&mut self) {
         // Doppelte Auflösung der Ansicht, damit das Bild auch vergrößert scharf ist
         let size = [self.view_px[0] * 2, self.view_px[1] * 2];
-        let img = self.viewport.screenshot(&self.rs, size, &self.camera, self.avatar_visible);
+        let img = self.viewport.screenshot(&self.rs, size, &self.camera, self.display);
         let default = match &self.avatar {
             Some(a) => format!("{}.png", a.name.rsplit_once('.').map(|(s, _)| s).unwrap_or(&a.name)),
             None => "stoffwerk.png".into(),
@@ -297,13 +309,9 @@ impl StoffwerkApp {
                     self.save(true);
                 }
                 ui.separator();
-                if ui.button("Avatar laden …").clicked() {
+                if ui.button("Avatar importieren …").clicked() {
                     self.open_avatar_dialog(&ctx);
                 }
-                if ui.add_enabled(self.avatar.is_some(), egui::Button::new("Avatar entfernen")).clicked() {
-                    self.remove_avatar(&ctx);
-                }
-                ui.separator();
                 if ui.button("Bildschirmfoto speichern …").clicked() {
                     self.screenshot_requested = true;
                 }
@@ -327,14 +335,71 @@ impl StoffwerkApp {
                     self.editor.delete_selection(&mut self.doc);
                 }
             });
-            ui.menu_button("Ansicht", |ui| {
+            ui.menu_button("2D-Schnitt", |ui| {
+                for t in Tool::ALL {
+                    if t == Tool::Seam {
+                        continue;
+                    }
+                    if ui.selectable_label(self.editor.tool == t, t.label()).clicked() {
+                        self.editor.set_tool(t);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                ui.checkbox(&mut self.editor.snap, "Am Raster einrasten");
+                ui.checkbox(&mut self.editor.split, "Ansicht teilen");
+                if ui.button("Ansicht zurücksetzen").clicked() {
+                    self.editor.reset_views();
+                }
+            });
+            ui.menu_button("Nähen", |ui| {
+                if ui.selectable_label(self.editor.tool == Tool::Seam, "Naht setzen").clicked() {
+                    self.editor.set_tool(Tool::Seam);
+                    ui.close();
+                }
+                if ui.add_enabled(!self.doc.seams.is_empty(), egui::Button::new("Alle Nähte löschen")).clicked() {
+                    self.editor.delete_all_seams(&mut self.doc);
+                    ui.close();
+                }
+                ui.checkbox(&mut self.editor.show_seams, "Nähte anzeigen");
+            });
+            ui.menu_button("Avatar", |ui| {
+                if ui.button("Importieren …").clicked() {
+                    self.open_avatar_dialog(&ctx);
+                }
+                let has = self.avatar.is_some();
+                if ui.add_enabled(has, egui::Button::new("Neu importieren …")).clicked() {
+                    if let Some(p) = self.avatar_path.clone() {
+                        self.import_dialog = Some((p, self.avatar_opts));
+                    }
+                }
+                if ui.add_enabled(has, egui::Button::new("Entfernen")).clicked() {
+                    self.remove_avatar(&ctx);
+                }
+                ui.separator();
+                ui.checkbox(&mut self.display.avatar, "Anzeigen");
+                ui.checkbox(&mut self.display.textures, "Texturen");
+                ui.checkbox(&mut self.editor.show_silhouette, "Silhouette im Schnitt");
+            });
+            ui.menu_button("Anzeige", |ui| {
+                ui.label(RichText::new("3D").weak().small());
+                ui.checkbox(&mut self.display.floor, "Boden");
+                ui.checkbox(&mut self.display.shadow, "Schatten");
                 if ui.button("Kamera auf Avatar").clicked() {
                     self.frame_avatar();
                 }
-                if ui.button("Schnittansicht zurücksetzen").clicked() {
-                    self.editor.reset_views();
+                ui.separator();
+                ui.label(RichText::new("2D").weak().small());
+                ui.checkbox(&mut self.editor.show_names, "Namen der Teile");
+                ui.checkbox(&mut self.editor.show_lengths, "Kantenlängen");
+            });
+            ui.menu_button("Fenster", |ui| {
+                for (l, name) in [(Layout::Both, "3D und 2D"), (Layout::Only3D, "Nur 3D"), (Layout::Only2D, "Nur 2D")] {
+                    if ui.selectable_label(self.layout == l, name).clicked() {
+                        self.layout = l;
+                        ui.close();
+                    }
                 }
-                ui.checkbox(&mut self.editor.split, "Schnittansicht teilen");
             });
             ui.menu_button("Hilfe", |ui| {
                 if ui.button("Über Stoffwerk").clicked() {
@@ -351,63 +416,106 @@ impl StoffwerkApp {
         }
     }
 
-    fn status(&self, ui: &mut egui::Ui) {
+    fn status(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            let project = self
+                .project_path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Unbenannt".into());
+            ui.label(RichText::new(format!("Version: {}", crate::VERSION)).weak().small());
+            ui.label(RichText::new(format!("{project}{}", if self.editor.dirty { " *" } else { "" })).weak().small());
+            ui.separator();
             if let Some(l) = &self.loading {
                 ui.spinner();
-                ui.label(format!("Lade {} …", l.name));
+                ui.label(RichText::new(format!("Lade {} …", l.name)).small());
             } else if let Some(a) = &self.avatar {
-                ui.label(format!("{}  ·  {} Dreiecke  ·  {:.2} m groß", a.name, a.triangle_count(), a.height()));
-            } else {
-                ui.label(RichText::new("Kein Avatar geladen – Datei > Avatar laden oder Datei ins Fenster ziehen").weak());
+                ui.label(
+                    RichText::new(format!("{}  ·  {} Dreiecke  ·  {:.2} m", a.name, a.triangle_count(), a.height())).weak().small(),
+                );
             }
             if let Some(info) = &self.info {
                 ui.separator();
-                ui.label(RichText::new(info).weak());
+                ui.label(RichText::new(info).weak().small());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("v{}", crate::VERSION)).weak());
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (l, icon, tip) in [
+                    (Layout::Only2D, Icon::Layout2D, "Nur 2D-Schnitt"),
+                    (Layout::Only3D, Icon::Layout3D, "Nur 3D"),
+                    (Layout::Both, Icon::LayoutBoth, "3D und 2D nebeneinander"),
+                ] {
+                    if icons::button(ui, icon, self.layout == l, true, tip).clicked() {
+                        self.layout = l;
+                    }
+                }
                 ui.separator();
-                ui.label(RichText::new(self.rs.adapter.get_info().name).weak());
+                ui.label(RichText::new(self.rs.adapter.get_info().name).weak().small());
             });
         });
     }
 
     /// Kopfleiste über einer Ansicht: Titel links, Werkzeuge daneben
-    fn header(ui: &mut egui::Ui, title: &str, tools: impl FnOnce(&mut egui::Ui)) {
+    /// Kopfleiste über einer Ansicht: Titel und zwei Symbolzeilen (Werkzeuge, Anzeige)
+    fn header(ui: &mut egui::Ui, title: &str, mut row: impl FnMut(&mut egui::Ui, usize)) {
         egui::Frame::NONE
             .fill(HEADER_BG)
-            .inner_margin(egui::Margin::symmetric(8, 4))
+            .inner_margin(egui::Margin::symmetric(6, 3))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(title).strong());
+                    ui.label(RichText::new(title).strong().small());
                     ui.separator();
-                    tools(ui);
+                    row(ui, 0);
                 });
+                ui.horizontal_wrapped(|ui| row(ui, 1));
             });
     }
 
     fn view_3d(&mut self, ui: &mut egui::Ui) {
         let mut preset: Option<(f32, f32)> = None;
         let mut frame = false;
-        Self::header(ui, "3D", |ui| {
-            for (label, yaw, pitch) in [
-                ("Vorne", 0.0, 0.1),
-                ("Hinten", std::f32::consts::PI, 0.1),
-                ("Links", -std::f32::consts::FRAC_PI_2, 0.1),
-                ("Rechts", std::f32::consts::FRAC_PI_2, 0.1),
-                ("Oben", 0.0, 1.5),
-            ] {
-                if ui.small_button(label).clicked() {
-                    preset = Some((yaw, pitch));
+        let mut shot = false;
+        let display = &mut self.display;
+        Self::header(ui, "3D", |ui, row| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if row == 0 {
+                for (icon, tip, yaw, pitch) in [
+                    (Icon::ViewFront, "Ansicht von vorn", 0.0, 0.1),
+                    (Icon::ViewBack, "Ansicht von hinten", std::f32::consts::PI, 0.1),
+                    (Icon::ViewLeft, "Ansicht von links", -std::f32::consts::FRAC_PI_2, 0.1),
+                    (Icon::ViewRight, "Ansicht von rechts", std::f32::consts::FRAC_PI_2, 0.1),
+                    (Icon::ViewTop, "Ansicht von oben", 0.0, 1.5),
+                ] {
+                    if icons::button(ui, icon, false, true, tip).clicked() {
+                        preset = Some((yaw, pitch));
+                    }
+                }
+                ui.separator();
+                if icons::button(ui, Icon::Frame, false, true, "Kamera auf den Avatar (Doppelklick)").clicked() {
+                    frame = true;
+                }
+            } else {
+                for (icon, flag, tip) in [
+                    (Icon::Person, &mut display.avatar, "Avatar anzeigen"),
+                    (Icon::Textures, &mut display.textures, "Texturen des Avatars"),
+                    (Icon::Floor, &mut display.floor, "Boden"),
+                    (Icon::Shadow, &mut display.shadow, "Schatten"),
+                ] {
+                    if icons::button(ui, icon, *flag, true, tip).clicked() {
+                        *flag = !*flag;
+                    }
+                }
+                ui.separator();
+                if icons::button(ui, Icon::Camera, false, true, "Bildschirmfoto speichern").clicked() {
+                    shot = true;
                 }
             }
-            ui.separator();
-            if ui.small_button("Auf Avatar").clicked() {
-                frame = true;
-            }
         });
+        if shot {
+            self.screenshot_requested = true;
+        }
         if frame {
             self.frame_avatar();
         }
@@ -440,7 +548,7 @@ impl StoffwerkApp {
         let size = [(rect.width() * ppp).round() as u32, (rect.height() * ppp).round() as u32];
         if size[0] > 0 && size[1] > 0 {
             self.view_px = size;
-            let tex = self.viewport.render(&self.rs, size, &self.camera, self.avatar_visible);
+            let tex = self.viewport.render(&self.rs, size, &self.camera, self.display);
             ui.painter().image(
                 tex,
                 rect,
@@ -464,20 +572,22 @@ impl StoffwerkApp {
             egui::Align2::LEFT_BOTTOM,
             "Links ziehen: drehen  ·  Rechts/Mitte: verschieben  ·  Mausrad: zoomen  ·  Doppelklick: auf Avatar",
             egui::FontId::proportional(11.0),
-            Color32::from_gray(115),
+            Color32::from_gray(30),
         );
     }
 
     fn view_2d(&mut self, ui: &mut egui::Ui) {
         let (editor, doc) = (&mut self.editor, &mut self.doc);
-        Self::header(ui, "2D-Schnitt", |ui| editor.toolbar(ui, doc));
+        Self::header(ui, "2D-Schnitt", |ui, row| {
+            if row == 0 { editor.toolbar(ui, doc) } else { editor.display_toolbar(ui) }
+        });
         self.editor.ui(ui, &mut self.doc);
     }
 
     /// Rechte Leiste: oben die Objektliste, darunter die Eigenschaften der Auswahl
     fn side_panel(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        Self::header(ui, "Objekte", |_| {});
+        Self::header(ui, "Objekte", |_, _| {});
         egui::ScrollArea::vertical().id_salt("objekte").max_height(ui.available_height() * 0.45).show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -486,7 +596,7 @@ impl StoffwerkApp {
                     Some(a) => {
                         let name = a.name.clone();
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut self.avatar_visible, "").on_hover_text("Anzeigen / ausblenden");
+                            ui.checkbox(&mut self.display.avatar, "").on_hover_text("Anzeigen / ausblenden");
                             let sel = self.avatar_selected && self.editor.sel == Sel::None;
                             if ui.selectable_label(sel, name).clicked() {
                                 self.avatar_selected = true;
@@ -506,7 +616,7 @@ impl StoffwerkApp {
         });
 
         ui.add_space(6.0);
-        Self::header(ui, "Eigenschaften", |_| {});
+        Self::header(ui, "Eigenschaften", |_, _| {});
         egui::ScrollArea::vertical().id_salt("eigenschaften").show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -743,6 +853,11 @@ impl eframe::App for StoffwerkApp {
             .size_range(200.0..=440.0)
             .frame(egui::Frame::NONE.fill(PANEL_BG))
             .show(ui, |ui| self.side_panel(ui));
+        if self.layout == Layout::Only3D {
+            egui::CentralPanel::no_frame().show(ui, |ui| self.view_3d(ui));
+        } else if self.layout == Layout::Only2D {
+            egui::CentralPanel::no_frame().show(ui, |ui| self.view_2d(ui));
+        } else {
         egui::Panel::left("3d")
             .resizable(true)
             .default_size((width - 270.0) * 0.4)
@@ -750,6 +865,7 @@ impl eframe::App for StoffwerkApp {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.view_3d(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.view_2d(ui));
+        }
 
         if self.editor.sel != Sel::None {
             self.avatar_selected = false;

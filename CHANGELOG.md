@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6
+
+**Optik wie in Marvelous Designer**
+- 3D-Fenster: grauer Verlaufshintergrund statt Schwarz, Bodenraster und ein Schatten des Avatars auf dem Boden. Avatare ohne Textur sind fast weiß wie eine Schneiderpuppe, vorher hellgrau.
+- 2D-Schnittfenster: heller Hintergrund, die Avatar-Silhouette liegt über dem Raster, Schnittteile hell mit dunklem Umriss.
+- Über dem 3D- und dem 2D-Fenster gibt es jetzt je zwei Symbolzeilen. Oben stehen die Werkzeuge bzw. Blickrichtungen, darunter die Anzeige-Schalter.
+  - 3D: Ansicht von vorn, hinten, links, rechts, oben, Kamera auf Avatar. Darunter Avatar, Texturen, Boden, Schatten an/aus und Bildschirmfoto.
+  - 2D: Silhouette, Namen der Teile, Kantenlängen an jeder Kante, Nähte an/aus.
+- Menüleiste nach Themen wie im Original: Datei, Bearbeiten, 2D-Schnitt, Nähen, Avatar, Anzeige, Fenster, Hilfe. Menüs für Funktionen, die noch fehlen (3D-Kleidung, Materialien, Retopologie, Animation), kommen mit diesen Funktionen.
+- Statusleiste: links Version und Projektname (mit Stern, wenn ungespeichert), rechts Knöpfe für die Aufteilung: 3D und 2D, nur 3D, nur 2D.
+- Nähen > Alle Nähte löschen.
+
 ## 0.1.5
 
 **Avatare ohne Textur waren schwarz** (seit 0.1.2)

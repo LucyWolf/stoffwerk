@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 pub use texture::TextureImage;
 
-/// Grundfarbe für Flächen ohne Textur: neutrales Hellgrau, leicht warm
-pub const SKIN_GRAY: [f32; 3] = [0.78, 0.76, 0.74];
+/// Grundfarbe für Flächen ohne Textur: fast weiß, wie eine Schneiderpuppe
+pub const SKIN_GRAY: [f32; 3] = [0.9, 0.89, 0.88];
 
 /// Alle Endungen, die geladen werden können (für den Dateidialog)
 pub const EXTENSIONS: &[&str] = &["fbx", "vrm", "glb", "gltf", "obj", "dae", "usd", "usda", "usdc", "usdz", "abc"];

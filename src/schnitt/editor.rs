@@ -19,7 +19,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    const ALL: [Tool; 8] = [
+    pub const ALL: [Tool; 8] = [
         Tool::Select,
         Tool::EditPoints,
         Tool::AddPoint,
@@ -30,7 +30,7 @@ impl Tool {
         Tool::Seam,
     ];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Tool::Select => "Auswählen",
             Tool::EditPoints => "Punkte",
@@ -162,6 +162,11 @@ pub struct Editor {
     silhouette: Option<(egui::TextureHandle, Vec2, Vec2)>,
     /// Wird bei jeder Änderung gesetzt; die App zeigt dann „ungespeichert“
     pub dirty: bool,
+    // Anzeige-Schalter (zweite Leiste)
+    pub show_silhouette: bool,
+    pub show_names: bool,
+    pub show_lengths: bool,
+    pub show_seams: bool,
 }
 
 const SEAM_COLORS: [Color32; 8] = [
@@ -196,6 +201,10 @@ impl Default for Editor {
             ctx_hit: Hit::None,
             silhouette: None,
             dirty: false,
+            show_silhouette: true,
+            show_names: true,
+            show_lengths: false,
+            show_seams: true,
         }
     }
 }
@@ -318,7 +327,22 @@ impl Editor {
         }
     }
 
-    fn set_tool(&mut self, t: Tool) {
+    /// Zweite Leiste: was im Schnittfenster angezeigt wird
+    pub fn display_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (icon, flag, tip) in [
+            (Icon::Person, &mut self.show_silhouette, "Avatar-Silhouette im Hintergrund"),
+            (Icon::Names, &mut self.show_names, "Namen der Schnittteile"),
+            (Icon::Ruler, &mut self.show_lengths, "Länge an jeder Kante"),
+            (Icon::Seam, &mut self.show_seams, "Nähte farbig anzeigen"),
+        ] {
+            if icons::button(ui, icon, *flag, true, tip).clicked() {
+                *flag = !*flag;
+            }
+        }
+    }
+
+    pub fn set_tool(&mut self, t: Tool) {
         self.tool = t;
         self.drawing.clear();
         self.seam_first = None;
@@ -384,6 +408,14 @@ impl Editor {
         }
         if del || (back && self.drawing.is_empty()) {
             self.delete_selection(doc);
+        }
+    }
+
+    pub fn delete_all_seams(&mut self, doc: &mut Doc) {
+        self.checkpoint(doc);
+        doc.seams.clear();
+        if matches!(self.sel, Sel::Seam(_)) {
+            self.sel = Sel::None;
         }
     }
 
@@ -666,17 +698,17 @@ impl Editor {
 
         // ---------------------------------------------------------- Zeichnen
         let view = self.views[vi];
-        painter.rect_filled(rect, 0.0, Color32::from_rgb(26, 28, 32));
-        if let Some((tex, min, max)) = &self.silhouette {
+        painter.rect_filled(rect, 0.0, Color32::from_rgb(198, 200, 203));
+        draw_grid(&painter, rect, &view);
+        if let Some((tex, min, max)) = self.silhouette.as_ref().filter(|_| self.show_silhouette) {
             let r = Rect::from_min_max(view.to_px(rect, Vec2::new(min.x, max.y)), view.to_px(rect, Vec2::new(max.x, min.y)));
             painter.image(
                 tex.id(),
                 r,
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                Color32::from_white_alpha(70),
+                Color32::from_rgba_unmultiplied(150, 152, 158, 150),
             );
         }
-        draw_grid(&painter, rect, &view);
 
         let hover_hit = hover_cm.map(|c| self.hit(doc, c, tol, points_everywhere)).unwrap_or(Hit::None);
         self.draw_pieces(&painter, rect, &view, doc, hover_hit);
@@ -689,7 +721,7 @@ impl Editor {
                 egui::Align2::LEFT_TOP,
                 format!("x {:.1}  y {:.1} cm", c.x, c.y),
                 egui::FontId::monospace(11.0),
-                Color32::from_gray(150),
+                Color32::from_gray(70),
             );
         }
         if vi == 0 || !self.split {
@@ -698,7 +730,7 @@ impl Editor {
                 egui::Align2::CENTER_BOTTOM,
                 self.tool.help(),
                 egui::FontId::proportional(12.0),
-                Color32::from_gray(120),
+                Color32::from_gray(80),
             );
         }
         // Länge der Kante unter der Maus
@@ -709,7 +741,7 @@ impl Editor {
                     egui::Align2::LEFT_BOTTOM,
                     format!("{len:.1} cm"),
                     egui::FontId::proportional(12.0),
-                    Color32::from_rgb(255, 230, 150),
+                    Color32::from_rgb(150, 75, 0),
                 );
             }
         }
@@ -962,11 +994,11 @@ impl Editor {
             let selected = sel_piece == Some(piece.id);
             let hovered = matches!(hover, Hit::Piece(id) if id == piece.id);
             let fill = if selected {
-                Color32::from_rgb(214, 222, 236)
+                Color32::from_rgb(226, 234, 250)
             } else if hovered {
-                Color32::from_rgb(205, 208, 214)
+                Color32::from_rgb(244, 244, 246)
             } else {
-                Color32::from_rgb(190, 193, 198)
+                Color32::from_rgb(234, 234, 236)
             };
             fill_polygon(painter, &outline, fill);
 
@@ -978,7 +1010,7 @@ impl Editor {
                 let stroke = if is_sel {
                     Stroke::new(3.0, Color32::from_rgb(255, 210, 60))
                 } else if is_hover {
-                    Stroke::new(2.5, Color32::from_rgb(255, 230, 140))
+                    Stroke::new(2.5, Color32::from_rgb(240, 150, 30))
                 } else {
                     Stroke::new(1.2, Color32::from_rgb(70, 90, 140))
                 };
@@ -990,16 +1022,30 @@ impl Editor {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.5, Color32::from_rgb(60, 110, 220))));
             }
 
+            // Kantenlängen
+            if self.show_lengths {
+                for s in piece.segments() {
+                    let mid = point_at(&s.poly, 0.5);
+                    painter.text(
+                        px(mid),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{:.1}", poly_len(&s.poly)),
+                        egui::FontId::proportional(10.5),
+                        Color32::from_rgb(40, 70, 150),
+                    );
+                }
+            }
+
             // Name in der Mitte
             let (min, max) = piece.bounds();
             let label = if piece.link.is_some() { format!("{} (sym.)", piece.name) } else { piece.name.clone() };
-            painter.text(
+            if self.show_names { painter.text(
                 px((min + max) * 0.5),
                 egui::Align2::CENTER_CENTER,
                 label,
                 egui::FontId::proportional(12.0),
                 Color32::from_gray(70),
-            );
+            ); }
 
             if selected || show_all_points {
                 for pt in &piece.pts {
@@ -1032,6 +1078,9 @@ impl Editor {
 
         // Nähte: beide Kanten in derselben Farbe, Striche zeigen, welche Stellen zusammenkommen
         for (i, seam) in doc.seams.iter().enumerate() {
+            if !self.show_seams && self.sel != Sel::Seam(seam.id) {
+                continue;
+            }
             let (Some(a), Some(b)) = (doc.segment(seam.a), doc.segment(seam.b)) else { continue };
             let color = seam_color(i);
             let width = if self.sel == Sel::Seam(seam.id) { 4.0 } else { 2.5 };
@@ -1064,7 +1113,7 @@ impl Editor {
                     egui::Align2::LEFT_BOTTOM,
                     format!("{:.1} cm", last.distance(c)),
                     egui::FontId::proportional(12.0),
-                    Color32::from_rgb(255, 230, 150),
+                    Color32::from_rgb(150, 75, 0),
                 );
             }
             painter.add(egui::Shape::line(pts, pen));
@@ -1097,7 +1146,7 @@ impl Editor {
                 egui::Align2::LEFT_TOP,
                 format!("{:.1} × {:.1} cm", (to.x - from.x).abs(), (to.y - from.y).abs()),
                 egui::FontId::proportional(12.0),
-                Color32::from_rgb(255, 230, 150),
+                Color32::from_rgb(150, 75, 0),
             );
         }
     }
@@ -1407,11 +1456,11 @@ fn draw_grid(painter: &egui::Painter, rect: Rect, view: &View) {
         let is_axis = cm.abs() < minor * 0.01;
         let is_major = ((cm / major).round() * major - cm).abs() < minor * 0.01;
         let color = if is_axis {
-            Color32::from_gray(95)
+            Color32::from_gray(130)
         } else if is_major {
-            Color32::from_gray(50)
+            Color32::from_gray(172)
         } else {
-            Color32::from_gray(35)
+            Color32::from_gray(186)
         };
         let s = Stroke::new(1.0, color);
         if vertical {
@@ -1437,6 +1486,6 @@ fn draw_grid(painter: &egui::Painter, rect: Rect, view: &View) {
         egui::Align2::RIGHT_TOP,
         format!("Raster {minor} cm"),
         egui::FontId::proportional(11.0),
-        Color32::from_gray(110),
+        Color32::from_gray(90),
     );
 }
