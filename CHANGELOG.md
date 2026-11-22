@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.10
+
+**Fell, Schnurrhaare und Ohrspitzen stachen durch den Stoff**
+- Der Stoff besteht aus Punkten im Abstand von etwa 2 cm. Alles, was dünner ist, rutschte zwischen den Punkten hindurch und war durch den Stoff hindurch zu sehen, etwa Fellspitzen, Schnurrhaare und dünne Ohren.
+- Dünne Teile bekommen jetzt einen Mantel, ein wenig dicker als die halbe Dreiecksgröße des Stoffs. Dann passt keine Kante mehr zwischen zwei Stoffpunkte, und der Stoff legt sich darüber wie ein Zelt.
+- Welche Teile dünn sind: alle mit ausgestanzter Textur (bei VRChat-Avataren fast immer Fell, Haarsträhnen, Wimpern, Schnurrhaare). Das geschieht automatisch. In den Eigenschaften eines angeklickten Avatar-Teils lässt es sich mit „Dünnes Teil (Fell, Haare, Schnurrhaare)“ ein- und ausschalten.
+- Zusätzlich hebt jede Spitze des Avatars (Eckpunkt) die Stofffläche an, durch die sie stechen würde, mit Reibung, damit der Stoff nicht seitlich abrutscht.
+- An Kanten und Spitzen einer Fläche schiebt die Kollision den Stoff von der Kante weg statt entlang der Flächenrichtung. Vorher zog sie ihn seitlich neben die Spitze herunter.
+
+**Prüfung**
+- Auf der Katzen-Testfigur (Ohren und Schnurrhaare jetzt als eigene Teile) stachen nach einem Tuchfall 8 Punkte am Kopf durch, jetzt keiner. Ein fester Test verlangt, dass beide Ohrspitzen unter dem Stoff liegen.
+
+**Zu beachten**
+- Sind Schnurrhaare oder Fell bei einem Avatar Teil des Kopf-Netzes und nicht eigene Teile, lassen sie sich nicht einzeln als dünn markieren. Dann bleibt nur, den Punktabstand zu verkleinern (Simulation > Punktabstand).
+- Über dünnen Teilen liegt der Stoff um den Mantel (etwa 1,6 cm bei 2 cm Punktabstand) höher. Das wirkt wie Volumen unter dem Stoff.
+
+**Nicht geprüft**
+- Mit Lucys echtem Avatar.
+
 ## 0.1.9
 
 **Stoff fiel durch den Avatar und knüllte**

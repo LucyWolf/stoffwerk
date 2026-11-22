@@ -62,6 +62,8 @@ pub struct StoffwerkApp {
     avatar_part: Option<usize>,
     /// Ausgeblendete Teile des Avatars (z. B. Haare, mitgelieferte Kleidung)
     part_hidden: Vec<bool>,
+    /// Dünne Teile (Fell, Haarsträhnen, Schnurrhaare): Stoff legt sich darüber statt durchgestochen zu werden
+    part_thin: Vec<bool>,
     avatar_selected: bool,
     loading: Option<Loading>,
     error: Option<String>,
@@ -102,6 +104,7 @@ impl StoffwerkApp {
             layout: Layout::Both,
             avatar_part: None,
             part_hidden: Vec::new(),
+            part_thin: Vec::new(),
             cloth: None,
             cloth_hash: 0,
             collider: None,
@@ -163,9 +166,11 @@ impl StoffwerkApp {
                 self.camera.frame_bounds(mesh.min, mesh.max);
                 self.viewport.set_avatar(&self.rs, Some(&mesh));
                 self.part_hidden = vec![false; mesh.parts.len()];
+                // Ausgestanzte Texturen sind bei VRChat-Avataren fast immer Fell, Haare, Wimpern oder Schnurrhaare
+                self.part_thin = mesh.parts.iter().map(|p| p.cutout).collect();
                 self.avatar_part = None;
                 self.editor.set_avatar(ctx, Some(&mesh), &self.part_hidden);
-                self.collider = Some(Collider::new(&mesh, &self.part_hidden));
+                self.collider = Some(Collider::new(&mesh, &self.part_hidden, &self.part_thin));
                 self.cloth_hash = 0; // Stoff neu am Avatar anlegen
                 self.avatar = Some(mesh);
                 if self.avatar_path.as_ref() != Some(&path) || self.avatar_opts != opts {
@@ -681,7 +686,7 @@ impl StoffwerkApp {
     fn parts_changed(&mut self, ctx: &egui::Context) {
         self.viewport.set_part_state(&self.rs, self.avatar_part, &self.part_hidden);
         self.editor.set_avatar(ctx, self.avatar.as_ref(), &self.part_hidden);
-        self.collider = self.avatar.as_ref().map(|a| Collider::new(a, &self.part_hidden));
+        self.collider = self.avatar.as_ref().map(|a| Collider::new(a, &self.part_hidden, &self.part_thin));
     }
 
     /// Stoff neu aufbauen, wenn sich der Schnitt geändert hat; während Play einen Schritt simulieren
@@ -827,6 +832,19 @@ impl StoffwerkApp {
                             .checkbox(&mut hidden, "Ausblenden")
                             .on_hover_text("Zum Beispiel Haare oder mitgelieferte Kleidung, die beim Anpassen stören")
                             .changed();
+                        let mut thin = self.part_thin.get(pi).copied().unwrap_or(false);
+                        let thin_changed = ui
+                            .checkbox(&mut thin, "Dünnes Teil (Fell, Haare, Schnurrhaare)")
+                            .on_hover_text(
+                                "Der Stoff legt sich darüber, statt dass es zwischen den Stoffpunkten hindurchsticht. \
+                                 Bei ausgestanzten Texturen ist das schon eingeschaltet.",
+                            )
+                            .changed();
+                        if thin_changed {
+                            if let Some(t) = self.part_thin.get_mut(pi) {
+                                *t = thin;
+                            }
+                        }
                         let any_hidden = self.part_hidden.iter().any(|h| *h);
                         let show_all = ui.add_enabled(any_hidden, egui::Button::new("Alle Teile einblenden")).clicked();
                         if toggled {
@@ -837,7 +855,7 @@ impl StoffwerkApp {
                         if show_all {
                             self.part_hidden.iter_mut().for_each(|h| *h = false);
                         }
-                        if toggled || show_all {
+                        if toggled || show_all || thin_changed {
                             self.parts_changed(&ctx);
                         }
                         return;

@@ -139,6 +139,8 @@ pub struct Cloth {
     in_seam: Vec<bool>,
     /// Punktabstand in Metern
     spacing: f32,
+    /// Spitzen des Avatars gegen den Stoff prüfen (abschaltbar für Vergleiche in Tests)
+    pub spikes: bool,
     pub time: f32,
 }
 
@@ -166,6 +168,7 @@ impl Cloth {
             piece_of: Vec::new(),
             in_seam: Vec::new(),
             spacing: spacing * 0.01,
+            spikes: true,
             time: 0.0,
         };
         let mut meshes = std::collections::HashMap::new();
@@ -290,6 +293,9 @@ impl Cloth {
             solve(&mut self.pos, &self.inv_mass, &self.bend, h2);
             self.solve_stitches(h2);
             self.self_collide();
+            if let Some(col) = collider.filter(|_| self.spikes) {
+                self.tent_over_spikes(col);
+            }
             let hit = self.collide(collider);
             // Geschwindigkeit aus der Bewegung, Reibung an Kontaktstellen, etwas Luftwiderstand
             for i in 0..self.pos.len() {
@@ -393,10 +399,96 @@ impl Cloth {
         }
     }
 
+    /// Spitzen des Avatars (Eckpunkte) gegen Stoffdreiecke: Was zwischen den Stoffpunkten hindurchsticht
+    /// (Ohrspitzen, Fell, Schnurrhaare), hebt den Stoff an wie eine Zeltstange. Die Seite, auf der die Spitze
+    /// bleiben soll, ist die, auf der sie zu Beginn des Teilschritts lag.
+    fn tent_over_spikes(&mut self, col: &Collider) {
+        use rayon::prelude::*;
+        use std::collections::HashMap;
+        const CELL: f32 = 0.03;
+        let key = |p: Vec3| ((p.x / CELL).floor() as i32, (p.y / CELL).floor() as i32, (p.z / CELL).floor() as i32);
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in &self.pos {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        let margin = Vec3::splat(THICKNESS + 0.01);
+        let (lo, hi) = (lo - margin, hi + margin);
+        let mut grid: HashMap<(i32, i32, i32), Vec<u32>> = HashMap::new();
+        for (ti, t) in self.indices.chunks_exact(3).enumerate() {
+            let [a, b, c] = [t[0], t[1], t[2]].map(|i| self.pos[i as usize]);
+            let (k0, k1) = (key(a.min(b).min(c) - Vec3::splat(THICKNESS)), key(a.max(b).max(c) + Vec3::splat(THICKNESS)));
+            for x in k0.0..=k1.0 {
+                for y in k0.1..=k1.1 {
+                    for z in k0.2..=k1.2 {
+                        grid.entry((x, y, z)).or_default().push(ti as u32);
+                    }
+                }
+            }
+        }
+        let (pos, prev, indices) = (&self.pos, &self.prev, &self.indices);
+        // Je Spitze: Korrektur für das Dreieck (Dreieck, Verschiebung entlang der Normale, Gewichte)
+        let fixes: Vec<(u32, Vec3, [f32; 3])> = col
+            .verts
+            .par_iter()
+            .filter(|v| v.cmpge(lo).all() && v.cmple(hi).all())
+            .filter_map(|&v| {
+                let list = grid.get(&key(v))?;
+                let mut best: Option<(f32, u32, Vec3, Vec3)> = None;
+                for &ti in list {
+                    let t = &indices[ti as usize * 3..ti as usize * 3 + 3];
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| pos[i as usize]);
+                    let q = collide::closest_on_triangle(v, a, b, c);
+                    let d2 = q.distance_squared(v);
+                    if d2 < THICKNESS * THICKNESS * 4.0 && best.is_none_or(|bb| d2 < bb.0) {
+                        best = Some((d2, ti, q, (b - a).cross(c - a)));
+                    }
+                }
+                let (_, ti, q, n) = best?;
+                let n = n.normalize_or_zero();
+                if n == Vec3::ZERO {
+                    return None;
+                }
+                let t = &indices[ti as usize * 3..ti as usize * 3 + 3];
+                let [pa, pb, pc] = [t[0], t[1], t[2]].map(|i| prev[i as usize]);
+                // Auf welcher Seite des Stoffs lag die Spitze vorher?
+                let pn = (pb - pa).cross(pc - pa);
+                let was = (v - pa).dot(pn).signum();
+                let was = if was == 0.0 { 1.0 } else { was };
+                let side = (v - q).dot(n) * was * pn.dot(n).signum();
+                if side >= THICKNESS {
+                    return None;
+                }
+                // Stoff so weit wegschieben, dass die Spitze wieder THICKNESS auf ihrer Seite liegt
+                let push = -(THICKNESS - side) * was * pn.dot(n).signum();
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| pos[i as usize]);
+                let bary = barycentric(q, a, b, c);
+                Some((ti, n * push, bary))
+            })
+            .collect();
+        for (ti, delta, w) in fixes {
+            let t = [self.indices[ti as usize * 3], self.indices[ti as usize * 3 + 1], self.indices[ti as usize * 3 + 2]];
+            let norm: f32 = w.iter().map(|x| x * x).sum::<f32>().max(1e-6);
+            let n = delta.normalize_or_zero();
+            let wmax = w.iter().cloned().fold(0.0, f32::max).max(1e-6);
+            for k in 0..3 {
+                let i = t[k] as usize;
+                self.pos[i] += delta * (w[k] / norm);
+                // Reibung an der Spitze: seitliches Abgleiten bremsen, sonst rutscht der Stoff herunter wie von einer Nadel
+                let moved = self.pos[i] - self.prev[i];
+                let tangential = moved - n * moved.dot(n);
+                self.pos[i] -= tangential * (0.9 * w[k].max(0.0) / wmax);
+            }
+        }
+    }
+
     /// Kollision mit Avatar und Boden; liefert je Punkt die Kontaktnormale
     fn collide(&mut self, collider: Option<&Collider>) -> Vec<Option<Vec3>> {
         use rayon::prelude::*;
         let prev = &self.prev;
+        // Mindestens der Abstand von der Mitte eines Stoffdreiecks zu seinen Ecken (≈ 0,6–0,75 × Punktabstand),
+        // sonst geht eine Spitze genau durch die Dreiecksmitte, ohne einen Stoffpunkt zu berühren
+        let thin_radius = (self.spacing * 0.8).max(THICKNESS);
         self.pos
             .par_iter_mut()
             .zip(prev.par_iter())
@@ -404,6 +496,11 @@ impl Cloth {
                 let mut normal = None;
                 if let Some(col) = collider {
                     if let Some((q, n)) = col.push_out(*p, *prev, THICKNESS) {
+                        *p = q;
+                        normal = Some(n);
+                    }
+                    // Mantel um dünne Teile: dicker als die halbe Dreiecksgröße, dann passt keine Kante zwischen die Stoffpunkte
+                    if let Some((q, n)) = col.push_out_thin(*p, *prev, thin_radius) {
                         *p = q;
                         normal = Some(n);
                     }
@@ -455,6 +552,18 @@ impl Cloth {
             .map(|s| self.pos[s.a as usize].distance(self.pos[s.b0 as usize].lerp(self.pos[s.b1 as usize], s.w)))
             .fold(0.0, f32::max)
     }
+}
+
+fn barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> [f32; 3] {
+    let (v0, v1, v2) = (b - a, c - a, p - a);
+    let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+    let den = d00 * d11 - d01 * d01;
+    if den.abs() < 1e-12 {
+        return [1.0 / 3.0; 3];
+    }
+    let v = (d11 * d20 - d01 * d21) / den;
+    let w = (d00 * d21 - d01 * d20) / den;
+    [1.0 - v - w, v, w]
 }
 
 /// Gauss-Seidel über Abstandsbedingungen (XPBD)
@@ -556,7 +665,7 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let col = Collider::new(&m, &[]);
+        let col = Collider::new(&m, &[], &[]);
         let mut doc = Doc::default();
         // 60 × 60 cm, mittig über dem Kopf (Kopf: x ±11 cm, Oberkante 1,75 m)
         let id = doc.add_piece(
@@ -596,7 +705,7 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let col = Collider::new(&m, &[]);
+        let col = Collider::new(&m, &[], &[]);
         let mut doc = Doc::default();
         let id = doc.add_piece(
             "Tuch",
@@ -619,7 +728,8 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let col = Collider::new(&m, &[]);
+        // Teile: Körper, Ohren, Schnurrhaare – die beiden letzten sind dünn
+        let col = Collider::new(&m, &[], &[false, true, true]);
         let mut doc = Doc::default();
         let id = doc.add_piece(
             "Tuch",
@@ -637,6 +747,102 @@ mod tests {
         assert!(durchdringungen(&c, 3.0) < 5);
     }
 
+    #[test]
+    fn ohrspitzen_stechen_nicht_durch() {
+        // Lucys Fall (0.1.9): Fellspitzen und Schnurrhaare stachen zwischen den Stoffpunkten hindurch
+        let m = crate::import::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien/figur_tpose_katze.obj"),
+            &Default::default(),
+        )
+        .unwrap();
+        // Teile: Körper, Ohren, Schnurrhaare – die beiden letzten sind dünn
+        let col = Collider::new(&m, &[], &[false, true, true]);
+        let mut doc = Doc::default();
+        let id = doc.add_piece(
+            "Tuch",
+            &[(Vec2::new(-30.0, 110.0), false), (Vec2::new(30.0, 110.0), false), (Vec2::new(30.0, 190.0), false), (Vec2::new(-30.0, 190.0), false)],
+        );
+        doc.piece_mut(id).unwrap().placement = Placement::Above;
+        let mut c = Cloth::build(&doc, Body { min: m.min, max: m.max }, 2.0);
+        for f in 0..240 {
+            c.step(Some(&col));
+            if std::env::var("STOFFWERK_DEBUG").is_ok() && f % 20 == 0 {
+                let top = c.pos.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+                let near = c.pos.iter().filter(|p| (p.x + 0.09).abs() < 0.03 && p.z.abs() < 0.03).map(|p| p.y).fold(f32::MIN, f32::max);
+                eprintln!("bild {f}: oben {top:.3}, über linker Ohrspitze {near:.3}");
+            }
+        }
+        let head = Vec3::new(0.0, 1.62, 0.0);
+        for tip in [Vec3::new(-0.09, 1.82, 0.0), Vec3::new(0.09, 1.82, 0.0)] {
+            // Nächste Stoffstelle; ihre Normale nach außen (weg vom Kopf) gedreht
+            let mut best = (f32::MAX, Vec3::ZERO, Vec3::ZERO);
+            for t in c.indices.chunks_exact(3) {
+                let (a, b, d) = (c.pos[t[0] as usize], c.pos[t[1] as usize], c.pos[t[2] as usize]);
+                let q = collide::closest_on_triangle(tip, a, b, d);
+                let dist = q.distance(tip);
+                if dist < best.0 {
+                    let mut n = (b - a).cross(d - a).normalize_or_zero();
+                    if n.dot(q - head) < 0.0 {
+                        n = -n;
+                    }
+                    best = (dist, q, n);
+                }
+            }
+            let side = (tip - best.1).dot(best.2);
+            assert!(best.0 < 0.05 && side < 0.0, "Ohrspitze {tip} sticht durch (Abstand {}, Seite {side})", best.0);
+        }
+    }
+
+    /// Kopf-Eckpunkte, die außerhalb des Stoffs liegen (durchstechen)
+    fn durchstechende_punkte(c: &Cloth, col: &Collider, head: Vec3) -> usize {
+        col.verts
+            .iter()
+            .filter(|v| v.y > 1.55 && v.x.abs() < 0.25)
+            .filter(|&&v| {
+                let mut best = (f32::MAX, Vec3::ZERO, Vec3::ZERO);
+                for t in c.indices.chunks_exact(3) {
+                    let (a, b, d) = (c.pos[t[0] as usize], c.pos[t[1] as usize], c.pos[t[2] as usize]);
+                    let q = collide::closest_on_triangle(v, a, b, d);
+                    let dist = q.distance(v);
+                    if dist < best.0 {
+                        let mut n = (b - a).cross(d - a).normalize_or_zero();
+                        if n.dot(q - head) < 0.0 {
+                            n = -n;
+                        }
+                        best = (dist, q, n);
+                    }
+                }
+                best.0 < 0.05 && (v - best.1).dot(best.2) > 0.002
+            })
+            .count()
+    }
+
+    #[test]
+    #[ignore]
+    fn vergleich_spitzen() {
+        let m = crate::import::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien/figur_tpose_katze.obj"),
+            &Default::default(),
+        )
+        .unwrap();
+        // Teile: Körper, Ohren, Schnurrhaare – die beiden letzten sind dünn
+        let col = Collider::new(&m, &[], &[false, true, true]);
+        for spikes in [false, true] {
+            let mut doc = Doc::default();
+            let id = doc.add_piece(
+                "Tuch",
+                &[(Vec2::new(-30.0, 110.0), false), (Vec2::new(30.0, 110.0), false), (Vec2::new(30.0, 190.0), false), (Vec2::new(-30.0, 190.0), false)],
+            );
+            doc.piece_mut(id).unwrap().placement = Placement::Above;
+            let mut c = Cloth::build(&doc, Body { min: m.min, max: m.max }, 2.0);
+            c.spikes = spikes;
+            for _ in 0..240 {
+                c.step(Some(&col));
+            }
+            eprintln!("Spitzenprüfung {spikes}: {} Kopfpunkte stechen durch", durchstechende_punkte(&c, &col, Vec3::new(0.0, 1.62, 0.0)));
+        }
+    }
+
     /// Sichtprüfung: Tuch über die T-Pose-Figur fallen lassen und Avatar + Stoff als OBJ schreiben.
     /// cargo test sichtpruefung -- --ignored, Ziel in STOFFWERK_OBJ_OUT
     #[test]
@@ -648,7 +854,8 @@ mod tests {
             &Default::default(),
         )
         .unwrap();
-        let col = Collider::new(&m, &[]);
+        // Teile: Körper, Ohren, Schnurrhaare – die beiden letzten sind dünn
+        let col = Collider::new(&m, &[], &[false, true, true]);
         let mut doc = Doc::default();
         let id = doc.add_piece(
             "Tuch",
