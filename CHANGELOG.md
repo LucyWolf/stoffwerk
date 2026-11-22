@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.9
+
+**Stoff fiel durch den Avatar und knüllte**
+- Die Kollision hat angenommen, dass alle Flächen eines Avatars nach außen zeigen. Bei Teilen mit falsch herum zeigenden Flächen und bei einseitigen Flächen (Ohren, Schnurrhaare, Wimpern) wurde der Stoff deshalb in den Körper hineingeschoben statt hinaus. Er fiel durch, verhakte sich und landete als Knäuel. Jetzt bleibt jeder Stoffpunkt auf der Seite einer Fläche, von der er gekommen ist, egal wohin die Fläche zeigt.
+- Selbstkollision: Stoff kann nicht mehr durch sich selbst hindurch. Falten legen sich aufeinander statt ineinander. Auf einer Testfigur mit Katzenkopf, Ohren und Schnurrhaaren steckte das Tuch vorher an 232 Stellen in sich selbst, jetzt an keiner.
+- Mehr Luftwiderstand: Der Stoff kommt zur Ruhe, statt lange nachzuzappeln.
+- Baumwolle ist etwas steifer und weniger klebrig. Sie bildet größere, weichere Falten und rutscht leichter über den Körper.
+
+**Prüfung**
+- Neue Testfigur `figur_tpose_katze.obj` (T-Pose, runder Kopf, Ohren und Schnurrhaare als einzelne dünne Flächen). Ein fester Test lässt ein Tuch darauf fallen. Es muss auf dem Kopf bleiben, darf nicht bis zum Boden hängen und darf nicht in sich selbst stecken.
+
+**Nicht geprüft**
+- Mit Lucys echtem Avatar, nur mit der nachgebauten Testfigur.
+
 ## 0.1.8
 
 Abschnitt 3 beginnt: Die Stoffsimulation.

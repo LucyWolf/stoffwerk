@@ -73,7 +73,7 @@ impl Fabric {
 
     pub fn params(self) -> FabricParams {
         match self {
-            Fabric::Cotton => FabricParams { density: 0.15, stretch: 1e-7, bend: 4e-3, friction: 0.4, color: [0.95, 0.95, 0.96] },
+            Fabric::Cotton => FabricParams { density: 0.15, stretch: 1e-7, bend: 1e-3, friction: 0.3, color: [0.95, 0.95, 0.96] },
             Fabric::Silk => FabricParams { density: 0.07, stretch: 1e-7, bend: 6e-2, friction: 0.15, color: [0.97, 0.94, 0.9] },
             Fabric::Denim => FabricParams { density: 0.35, stretch: 2e-8, bend: 5e-4, friction: 0.5, color: [0.55, 0.65, 0.82] },
             Fabric::Knit => FabricParams { density: 0.2, stretch: 4e-5, bend: 2e-2, friction: 0.5, color: [0.92, 0.9, 0.95] },
@@ -134,6 +134,11 @@ pub struct Cloth {
     stretch: Vec<Dist>,
     bend: Vec<Dist>,
     stitches: Vec<Stitch>,
+    /// Zu welchem Teil ein Punkt gehört und ob er an einer Naht liegt (für die Selbstkollision)
+    piece_of: Vec<u32>,
+    in_seam: Vec<bool>,
+    /// Punktabstand in Metern
+    spacing: f32,
     pub time: f32,
 }
 
@@ -158,6 +163,9 @@ impl Cloth {
             stretch: Vec::new(),
             bend: Vec::new(),
             stitches: Vec::new(),
+            piece_of: Vec::new(),
+            in_seam: Vec::new(),
+            spacing: spacing * 0.01,
             time: 0.0,
         };
         let mut meshes = std::collections::HashMap::new();
@@ -176,6 +184,8 @@ impl Cloth {
                 c.inv_mass.push(0.0);
                 c.friction.push(fp.friction);
                 c.uv.push(p);
+                c.piece_of.push(c.pieces.len() as u32);
+                c.in_seam.push(false);
             }
             // Masse aus der Fläche der anliegenden Dreiecke
             let mut mass = vec![0.0f32; m.verts.len()];
@@ -239,6 +249,11 @@ impl Cloth {
                 c.stitches.push(Stitch { a: vb + bb, b0: a0 + ba, b1: a1 + ba, w, rest: 0.0 });
             }
         }
+        for s in &c.stitches {
+            for i in [s.a, s.b0, s.b1] {
+                c.in_seam[i as usize] = true;
+            }
+        }
         // Anfangslänge merken: die Nähte ziehen sich von dort langsam zusammen
         for s in &mut c.stitches {
             let target = c.pos[s.b0 as usize].lerp(c.pos[s.b1 as usize], s.w);
@@ -274,6 +289,7 @@ impl Cloth {
             solve(&mut self.pos, &self.inv_mass, &self.stretch, h2);
             solve(&mut self.pos, &self.inv_mass, &self.bend, h2);
             self.solve_stitches(h2);
+            self.self_collide();
             let hit = self.collide(collider);
             // Geschwindigkeit aus der Bewegung, Reibung an Kontaktstellen, etwas Luftwiderstand
             for i in 0..self.pos.len() {
@@ -284,7 +300,8 @@ impl Cloth {
                     let tangential = v - n * along_n;
                     v = tangential * (1.0 - self.friction[i]).max(0.0) + n * along_n.max(0.0);
                 }
-                self.vel[i] = v * (1.0 - 0.6 * h);
+                // Luftwiderstand: der Stoff kommt zur Ruhe, statt nachzuzappeln
+                self.vel[i] = v * (1.0 - 2.0 * h);
                 // Ausreißer abfangen, falls etwas explodiert
                 if !self.vel[i].is_finite() || self.vel[i].length() > 20.0 {
                     self.vel[i] = Vec3::ZERO;
@@ -320,15 +337,73 @@ impl Cloth {
         }
     }
 
+    /// Selbstkollision: Stoffpunkte halten Abstand voneinander, außer sie liegen auch im Schnitt nah beieinander.
+    /// Jacobi-Schritt (erst alle Korrekturen berechnen, dann anwenden), damit es parallel laufen kann.
+    fn self_collide(&mut self) {
+        use rayon::prelude::*;
+        use std::collections::HashMap;
+        let r = self.spacing * 0.45; // Mindestabstand halbe Punktdichte: Falten liegen aufeinander, nicht ineinander
+        let cell = 2.0 * r;
+        let key = |p: Vec3| ((p.x / cell).floor() as i32, (p.y / cell).floor() as i32, (p.z / cell).floor() as i32);
+        let mut grid: HashMap<(i32, i32, i32), Vec<u32>> = HashMap::with_capacity(self.pos.len());
+        for (i, p) in self.pos.iter().enumerate() {
+            grid.entry(key(*p)).or_default().push(i as u32);
+        }
+        let near_cm = 2.0 * r * 100.0 * 1.6;
+        let (pos, uv, piece_of, in_seam, inv_mass) = (&self.pos, &self.uv, &self.piece_of, &self.in_seam, &self.inv_mass);
+        let corr: Vec<Vec3> = (0..pos.len())
+            .into_par_iter()
+            .map(|i| {
+                if inv_mass[i] == 0.0 {
+                    return Vec3::ZERO;
+                }
+                let (cx, cy, cz) = key(pos[i]);
+                let mut c = Vec3::ZERO;
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            let Some(list) = grid.get(&(cx + dx, cy + dy, cz + dz)) else { continue };
+                            for &j in list {
+                                let j = j as usize;
+                                if j == i {
+                                    continue;
+                                }
+                                // Nachbarn im Schnitt dürfen nah sein; genähte Ränder verschiedener Teile auch
+                                if piece_of[i] == piece_of[j] {
+                                    if uv[i].distance(uv[j]) < near_cm {
+                                        continue;
+                                    }
+                                } else if in_seam[i] && in_seam[j] {
+                                    continue;
+                                }
+                                let d = pos[i] - pos[j];
+                                let len = d.length();
+                                if len < 2.0 * r && len > 1e-9 {
+                                    c += d / len * (2.0 * r - len) * 0.5;
+                                }
+                            }
+                        }
+                    }
+                }
+                c
+            })
+            .collect();
+        for (p, c) in self.pos.iter_mut().zip(corr) {
+            *p += c * 0.5;
+        }
+    }
+
     /// Kollision mit Avatar und Boden; liefert je Punkt die Kontaktnormale
     fn collide(&mut self, collider: Option<&Collider>) -> Vec<Option<Vec3>> {
         use rayon::prelude::*;
+        let prev = &self.prev;
         self.pos
             .par_iter_mut()
-            .map(|p| {
+            .zip(prev.par_iter())
+            .map(|(p, prev)| {
                 let mut normal = None;
                 if let Some(col) = collider {
-                    if let Some((q, n)) = col.push_out(*p, THICKNESS) {
+                    if let Some((q, n)) = col.push_out(*p, *prev, THICKNESS) {
                         *p = q;
                         normal = Some(n);
                     }
@@ -499,6 +574,109 @@ mod tests {
         // Kein Punkt steckt im Kopf
         let inside = c.pos.iter().filter(|p| p.x.abs() < 0.10 && p.z.abs() < 0.10 && p.y > 1.53 && p.y < 1.74).count();
         assert_eq!(inside, 0);
+    }
+
+    /// Stoffpunkte, die im Schnitt weit auseinanderliegen, im Raum aber fast aufeinander: Stoff steckt in sich selbst
+    fn durchdringungen(c: &Cloth, spacing_cm: f32) -> usize {
+        let mut n = 0;
+        for i in 0..c.pos.len() {
+            for j in (i + 1)..c.pos.len() {
+                if c.uv[i].distance(c.uv[j]) > 3.0 * spacing_cm && c.pos[i].distance(c.pos[j]) < 0.25 * spacing_cm * 0.01 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn tuch_knuellt_nicht_in_sich_selbst() {
+        let m = crate::import::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien/figur.glb"),
+            &Default::default(),
+        )
+        .unwrap();
+        let col = Collider::new(&m, &[]);
+        let mut doc = Doc::default();
+        let id = doc.add_piece(
+            "Tuch",
+            &[(Vec2::new(-45.0, 100.0), false), (Vec2::new(45.0, 100.0), false), (Vec2::new(45.0, 190.0), false), (Vec2::new(-45.0, 190.0), false)],
+        );
+        doc.piece_mut(id).unwrap().placement = Placement::Above;
+        let mut c = Cloth::build(&doc, Body { min: m.min, max: m.max }, 3.0);
+        for _ in 0..300 {
+            c.step(Some(&col));
+        }
+        let n = durchdringungen(&c, 3.0);
+        assert!(n < 5, "{n} Stellen, an denen der Stoff in sich selbst steckt");
+    }
+
+    #[test]
+    fn tuch_bleibt_auf_katzenkopf_und_knuellt_nicht() {
+        // Lucys Fall (0.1.8): Tuch fiel durch einen Kopf mit falsch herum zeigenden Flächen und knüllte am Boden
+        let m = crate::import::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien/figur_tpose_katze.obj"),
+            &Default::default(),
+        )
+        .unwrap();
+        let col = Collider::new(&m, &[]);
+        let mut doc = Doc::default();
+        let id = doc.add_piece(
+            "Tuch",
+            &[(Vec2::new(-30.0, 110.0), false), (Vec2::new(30.0, 110.0), false), (Vec2::new(30.0, 190.0), false), (Vec2::new(-30.0, 190.0), false)],
+        );
+        doc.piece_mut(id).unwrap().placement = Placement::Above;
+        let mut c = Cloth::build(&doc, Body { min: m.min, max: m.max }, 3.0);
+        for _ in 0..240 {
+            c.step(Some(&col));
+        }
+        let top = c.pos.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        let low = c.pos.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+        assert!(top > 1.70, "Tuch nicht mehr auf dem Kopf: oben {top}");
+        assert!(low > 0.5, "Tuch hängt bis zum Boden: unten {low}");
+        assert!(durchdringungen(&c, 3.0) < 5);
+    }
+
+    /// Sichtprüfung: Tuch über die T-Pose-Figur fallen lassen und Avatar + Stoff als OBJ schreiben.
+    /// cargo test sichtpruefung -- --ignored, Ziel in STOFFWERK_OBJ_OUT
+    #[test]
+    #[ignore]
+    fn sichtpruefung_tuch_auf_katze() {
+        let out = std::env::var("STOFFWERK_OBJ_OUT").unwrap_or("/tmp/tuch.obj".into());
+        let m = crate::import::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien/figur_tpose_katze.obj"),
+            &Default::default(),
+        )
+        .unwrap();
+        let col = Collider::new(&m, &[]);
+        let mut doc = Doc::default();
+        let id = doc.add_piece(
+            "Tuch",
+            &[(Vec2::new(-30.0, 110.0), false), (Vec2::new(30.0, 110.0), false), (Vec2::new(30.0, 190.0), false), (Vec2::new(-30.0, 190.0), false)],
+        );
+        doc.piece_mut(id).unwrap().placement = Placement::Above;
+        let mut c = Cloth::build(&doc, Body { min: m.min, max: m.max }, 2.0);
+        for _ in 0..300 {
+            c.step(Some(&col));
+        }
+        eprintln!("Durchdringungen: {}", durchdringungen(&c, 2.0));
+        let mut s = String::new();
+        for p in &m.positions {
+            s += &format!("v {} {} {}\n", p.x, p.y, p.z);
+        }
+        for p in &c.pos {
+            s += &format!("v {} {} {}\n", p.x, p.y, p.z);
+        }
+        s += "o avatar\n";
+        for t in m.indices.chunks_exact(3) {
+            s += &format!("f {} {} {}\n", t[0] + 1, t[1] + 1, t[2] + 1);
+        }
+        s += "o stoff\n";
+        let o = m.positions.len() as u32 + 1;
+        for t in c.indices.chunks_exact(3) {
+            s += &format!("f {} {} {}\n", t[0] + o, t[1] + o, t[2] + o);
+        }
+        std::fs::write(out, s).unwrap();
     }
 
     #[test]

@@ -11,3 +11,4 @@ Kleine Figuren (1,75 m) in jedem Format, das Stoffwerk lädt. Der Release-Workfl
 | figur.dae | Collada mit Z oben, Zentimetern, Textur über sampler → surface → image |
 | figur.usda | USD mit Z oben, metersPerUnit 0.01, UsdPreviewSurface + UsdUVTexture |
 | figur.glb | eingebettete Texturen, Haar-Teil mit alphaMode MASK (ausgestanzt) |
+| figur_tpose_katze.obj | Simulation: T-Pose, Kugelkopf mit falsch herum zeigenden Flächen, einseitige Ohren und Schnurrhaare (Tuch darf nicht durchfallen oder knüllen) |

@@ -1,6 +1,7 @@
 //! Kollision Stoff ↔ Avatar: Dreiecke des Avatars in einem Raster, je Punkt die nächste Fläche.
 
 use glam::Vec3;
+
 use std::collections::HashMap;
 
 const CELL: f32 = 0.03;
@@ -44,8 +45,10 @@ impl Collider {
         Self { tris, normals, grid }
     }
 
-    /// Liegt der Punkt zu nah an oder in der Haut, wird er auf die Oberfläche (plus Dicke) geschoben
-    pub fn push_out(&self, p: Vec3, thickness: f32) -> Option<(Vec3, Vec3)> {
+    /// Liegt der Punkt zu nah an oder in der Haut, wird er auf die Oberfläche (plus Dicke) geschoben.
+    /// „Außen“ ist die Seite, von der der Punkt kam (`prev`), nicht die Richtung der Flächennormale:
+    /// so stören weder falsch herum zeigende Flächen noch einseitige Ohren oder Schnurrhaare.
+    pub fn push_out(&self, p: Vec3, prev: Vec3, thickness: f32) -> Option<(Vec3, Vec3)> {
         let list = self.grid.get(&cell(p))?;
         let mut best: Option<(f32, Vec3, Vec3)> = None;
         for &ti in list {
@@ -60,12 +63,14 @@ impl Collider {
         if n == Vec3::ZERO {
             return None;
         }
-        let side = (p - q).dot(n);
-        // Vor der Fläche und weiter weg als die Dicke: nichts zu tun
+        let came_from = (prev - q).dot(n);
+        let out = if came_from >= 0.0 { n } else { -n };
+        let side = (p - q).dot(out);
+        // Auf der eigenen Seite und weiter weg als die Dicke: nichts zu tun
         if side >= thickness || (side > 0.0 && d2.sqrt() >= thickness) {
             return None;
         }
-        Some((q + n * thickness, n))
+        Some((q + out * thickness, out))
     }
 }
 
@@ -109,6 +114,21 @@ fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn einseitige_flaeche_haelt_von_beiden_seiten() {
+        // Ein einzelnes Dreieck (wie ein Ohr), Normale zeigt nach +z. Stoff kommt von hinten (−z):
+        // er muss hinten bleiben, nicht nach vorn durchgereicht werden
+        let mut m = crate::import::AvatarMesh::new();
+        for p in [Vec3::new(-0.1, 1.0, 0.0), Vec3::new(0.1, 1.0, 0.0), Vec3::new(0.0, 1.2, 0.0)] {
+            m.push_vertex(p, Vec3::Z, glam::Vec2::ZERO, [1.0; 3]);
+        }
+        m.indices.extend([0, 1, 2]);
+        m.close_part(0, None, false);
+        let col = Collider::new(&m, &[]);
+        let (q, n) = col.push_out(Vec3::new(0.0, 1.05, 0.001), Vec3::new(0.0, 1.05, -0.003), 0.004).unwrap();
+        assert!(q.z < 0.0 && n.z < 0.0, "{q} {n}");
+    }
+
     use super::*;
 
     #[test]
@@ -120,10 +140,11 @@ mod tests {
         .unwrap();
         let col = Collider::new(&m, &[]);
         // Rumpf vorne bei z = 0,12; ein Punkt 1 cm hinter der Vorderseite steckt im Körper
-        let (q, n) = col.push_out(Vec3::new(0.0, 1.2, 0.11), 0.004).unwrap();
+        // Von vorn gekommen (prev vor der Haut), jetzt 1 cm drin: nach vorn hinaus
+        let (q, n) = col.push_out(Vec3::new(0.0, 1.2, 0.11), Vec3::new(0.0, 1.2, 0.13), 0.004).unwrap();
         assert!((q.z - 0.124).abs() < 1e-3, "{q}");
         assert!(n.z > 0.9);
         // 5 cm davor: frei
-        assert!(col.push_out(Vec3::new(0.0, 1.2, 0.17), 0.004).is_none());
+        assert!(col.push_out(Vec3::new(0.0, 1.2, 0.17), Vec3::new(0.0, 1.2, 0.18), 0.004).is_none());
     }
 }
