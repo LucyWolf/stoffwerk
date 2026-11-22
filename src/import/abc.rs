@@ -69,6 +69,7 @@ fn visit(obj: &ObjectReader, reader: &mut dyn ArchiveReader, archive: &Archive, 
                 corner += c;
             }
             out.close_part(first, None, false);
+            out.name_part(first, &[&obj.header.name]);
         }
     }
     for i in 0..obj.child_count() {

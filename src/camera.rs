@@ -44,6 +44,14 @@ impl OrbitCamera {
         perspective_rh(self.fov_y, aspect.max(0.01), near, far)
     }
 
+    /// Strahl von der Kamera durch einen Bildpunkt; `ndc` in -1..1 (y nach oben)
+    pub fn ray(&self, ndc: glam::Vec2, aspect: f32) -> (Vec3, Vec3) {
+        let inv = (self.proj(aspect) * self.view()).inverse();
+        let near = inv.project_point3(Vec3::new(ndc.x, ndc.y, 0.0));
+        let far = inv.project_point3(Vec3::new(ndc.x, ndc.y, 1.0));
+        (near, (far - near).normalize_or(Vec3::NEG_Z))
+    }
+
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         self.yaw -= dx * 0.008;
         self.pitch = (self.pitch + dy * 0.008).clamp(-1.55, 1.55);

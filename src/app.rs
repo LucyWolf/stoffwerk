@@ -49,6 +49,10 @@ pub struct StoffwerkApp {
     import_dialog: Option<(PathBuf, ImportOptions)>,
     display: Display,
     layout: Layout,
+    /// Angeklickter Teil des Avatars (gelb markiert)
+    avatar_part: Option<usize>,
+    /// Ausgeblendete Teile des Avatars (z. B. Haare, mitgelieferte Kleidung)
+    part_hidden: Vec<bool>,
     avatar_selected: bool,
     loading: Option<Loading>,
     error: Option<String>,
@@ -87,6 +91,8 @@ impl StoffwerkApp {
             import_dialog: None,
             display: Display::default(),
             layout: Layout::Both,
+            avatar_part: None,
+            part_hidden: Vec::new(),
             avatar_selected: false,
             loading: None,
             error: None,
@@ -141,7 +147,9 @@ impl StoffwerkApp {
             Ok(mesh) => {
                 self.camera.frame_bounds(mesh.min, mesh.max);
                 self.viewport.set_avatar(&self.rs, Some(&mesh));
-                self.editor.set_avatar(ctx, Some(&mesh));
+                self.part_hidden = vec![false; mesh.parts.len()];
+                self.avatar_part = None;
+                self.editor.set_avatar(ctx, Some(&mesh), &self.part_hidden);
                 self.avatar = Some(mesh);
                 if self.avatar_path.as_ref() != Some(&path) || self.avatar_opts != opts {
                     self.editor.dirty = true;
@@ -159,7 +167,9 @@ impl StoffwerkApp {
         self.avatar_path = None;
         self.avatar_selected = false;
         self.viewport.set_avatar(&self.rs, None);
-        self.editor.set_avatar(ctx, None);
+        self.editor.set_avatar(ctx, None, &[]);
+        self.part_hidden.clear();
+        self.avatar_part = None;
         self.editor.dirty = true;
     }
 
@@ -457,7 +467,7 @@ impl StoffwerkApp {
     }
 
     /// Kopfleiste über einer Ansicht: Titel links, Werkzeuge daneben
-    /// Kopfleiste über einer Ansicht: Titel und zwei Symbolzeilen (Werkzeuge, Anzeige)
+    /// Kopfleiste über einer Ansicht: Titel und Werkzeuge
     fn header(ui: &mut egui::Ui, title: &str, mut row: impl FnMut(&mut egui::Ui, usize)) {
         egui::Frame::NONE
             .fill(HEADER_BG)
@@ -469,53 +479,30 @@ impl StoffwerkApp {
                     ui.separator();
                     row(ui, 0);
                 });
-                ui.horizontal_wrapped(|ui| row(ui, 1));
             });
     }
 
     fn view_3d(&mut self, ui: &mut egui::Ui) {
         let mut preset: Option<(f32, f32)> = None;
         let mut frame = false;
-        let mut shot = false;
-        let display = &mut self.display;
-        Self::header(ui, "3D", |ui, row| {
+        Self::header(ui, "3D", |ui, _| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if row == 0 {
-                for (icon, tip, yaw, pitch) in [
-                    (Icon::ViewFront, "Ansicht von vorn", 0.0, 0.1),
-                    (Icon::ViewBack, "Ansicht von hinten", std::f32::consts::PI, 0.1),
-                    (Icon::ViewLeft, "Ansicht von links", -std::f32::consts::FRAC_PI_2, 0.1),
-                    (Icon::ViewRight, "Ansicht von rechts", std::f32::consts::FRAC_PI_2, 0.1),
-                    (Icon::ViewTop, "Ansicht von oben", 0.0, 1.5),
-                ] {
-                    if icons::button(ui, icon, false, true, tip).clicked() {
-                        preset = Some((yaw, pitch));
-                    }
-                }
-                ui.separator();
-                if icons::button(ui, Icon::Frame, false, true, "Kamera auf den Avatar (Doppelklick)").clicked() {
-                    frame = true;
-                }
-            } else {
-                for (icon, flag, tip) in [
-                    (Icon::Person, &mut display.avatar, "Avatar anzeigen"),
-                    (Icon::Textures, &mut display.textures, "Texturen des Avatars"),
-                    (Icon::Floor, &mut display.floor, "Boden"),
-                    (Icon::Shadow, &mut display.shadow, "Schatten"),
-                ] {
-                    if icons::button(ui, icon, *flag, true, tip).clicked() {
-                        *flag = !*flag;
-                    }
-                }
-                ui.separator();
-                if icons::button(ui, Icon::Camera, false, true, "Bildschirmfoto speichern").clicked() {
-                    shot = true;
+            for (icon, tip, yaw, pitch) in [
+                (Icon::ViewFront, "Ansicht von vorn", 0.0, 0.1),
+                (Icon::ViewBack, "Ansicht von hinten", std::f32::consts::PI, 0.1),
+                (Icon::ViewLeft, "Ansicht von links", -std::f32::consts::FRAC_PI_2, 0.1),
+                (Icon::ViewRight, "Ansicht von rechts", std::f32::consts::FRAC_PI_2, 0.1),
+                (Icon::ViewTop, "Ansicht von oben", 0.0, 1.5),
+            ] {
+                if icons::button(ui, icon, false, true, tip).clicked() {
+                    preset = Some((yaw, pitch));
                 }
             }
+            ui.separator();
+            if icons::button(ui, Icon::Frame, false, true, "Kamera auf den Avatar (Doppelklick)").clicked() {
+                frame = true;
+            }
         });
-        if shot {
-            self.screenshot_requested = true;
-        }
         if frame {
             self.frame_avatar();
         }
@@ -542,6 +529,14 @@ impl StoffwerkApp {
         }
         if response.double_clicked() {
             self.frame_avatar();
+        } else if response.clicked() {
+            // Klick auf den Avatar wählt den Teil darunter aus, Klick daneben hebt die Auswahl auf
+            if let Some(pos) = response.interact_pointer_pos() {
+                let ndc = egui::vec2((pos.x - rect.left()) / rect.width() * 2.0 - 1.0, 1.0 - (pos.y - rect.top()) / rect.height() * 2.0);
+                let (o, d) = self.camera.ray(glam::Vec2::new(ndc.x, ndc.y), rect.width() / rect.height().max(1.0));
+                let hit = self.avatar.as_ref().filter(|_| self.display.avatar).and_then(|a| a.pick(o, d, &self.part_hidden));
+                self.select_part(hit.map(|h| h.0));
+            }
         }
 
         let ppp = ui.ctx().pixels_per_point();
@@ -557,6 +552,29 @@ impl StoffwerkApp {
             );
         }
 
+        // Anzeige-Schalter schweben oben links über der 3D-Ansicht
+        let mut shot = false;
+        let display = &mut self.display;
+        overlay(ui, rect, |ui| {
+            for (icon, flag, tip) in [
+                (Icon::Person, &mut display.avatar, "Avatar anzeigen"),
+                (Icon::Textures, &mut display.textures, "Texturen des Avatars"),
+                (Icon::Floor, &mut display.floor, "Boden"),
+                (Icon::Shadow, &mut display.shadow, "Schatten"),
+            ] {
+                if icons::button(ui, icon, *flag, true, tip).clicked() {
+                    *flag = !*flag;
+                }
+            }
+            ui.add_space(6.0);
+            if icons::button(ui, Icon::Camera, false, true, "Bildschirmfoto speichern").clicked() {
+                shot = true;
+            }
+        });
+        if shot {
+            self.screenshot_requested = true;
+        }
+
         let painter = ui.painter_at(rect);
         if let Some(l) = &self.loading {
             painter.text(
@@ -570,18 +588,34 @@ impl StoffwerkApp {
         painter.text(
             rect.left_bottom() + egui::vec2(8.0, -6.0),
             egui::Align2::LEFT_BOTTOM,
-            "Links ziehen: drehen  ·  Rechts/Mitte: verschieben  ·  Mausrad: zoomen  ·  Doppelklick: auf Avatar",
+            "Klick: Teil auswählen  ·  Links ziehen: drehen  ·  Rechts/Mitte: verschieben  ·  Mausrad: zoomen  ·  Doppelklick: auf Avatar",
             egui::FontId::proportional(11.0),
             Color32::from_gray(30),
         );
     }
 
+    fn select_part(&mut self, part: Option<usize>) {
+        self.avatar_part = part;
+        if part.is_some() {
+            self.avatar_selected = true;
+            self.editor.sel = Sel::None;
+        }
+        self.viewport.set_part_state(&self.rs, self.avatar_part, &self.part_hidden);
+    }
+
+    /// Sichtbarkeit der Teile hat sich geändert: 3D und Silhouette nachziehen
+    fn parts_changed(&mut self, ctx: &egui::Context) {
+        self.viewport.set_part_state(&self.rs, self.avatar_part, &self.part_hidden);
+        self.editor.set_avatar(ctx, self.avatar.as_ref(), &self.part_hidden);
+    }
+
     fn view_2d(&mut self, ui: &mut egui::Ui) {
         let (editor, doc) = (&mut self.editor, &mut self.doc);
-        Self::header(ui, "2D-Schnitt", |ui, row| {
-            if row == 0 { editor.toolbar(ui, doc) } else { editor.display_toolbar(ui) }
-        });
+        Self::header(ui, "2D-Schnitt", |ui, _| editor.toolbar(ui, doc));
+        let area = ui.available_rect_before_wrap();
         self.editor.ui(ui, &mut self.doc);
+        let editor = &mut self.editor;
+        overlay(ui, area, |ui| editor.display_toolbar(ui));
     }
 
     /// Rechte Leiste: oben die Objektliste, darunter die Eigenschaften der Auswahl
@@ -595,14 +629,45 @@ impl StoffwerkApp {
                 match &self.avatar {
                     Some(a) => {
                         let name = a.name.clone();
+                        let parts: Vec<String> = a.parts.iter().map(|p| p.name.clone()).collect();
+                        let mut pick: Option<Option<usize>> = None;
+                        let mut vis_changed = false;
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut self.display.avatar, "").on_hover_text("Anzeigen / ausblenden");
-                            let sel = self.avatar_selected && self.editor.sel == Sel::None;
+                            let sel = self.avatar_selected && self.avatar_part.is_none() && self.editor.sel == Sel::None;
                             if ui.selectable_label(sel, name).clicked() {
                                 self.avatar_selected = true;
-                                self.editor.sel = Sel::None;
+                                pick = Some(None);
                             }
                         });
+                        // Teile des Avatars, einzeln auswählbar und ausblendbar
+                        egui::CollapsingHeader::new(RichText::new(format!("{} Teile", parts.len())).small())
+                            .id_salt("avatar-teile")
+                            .default_open(parts.len() <= 12)
+                            .show(ui, |ui| {
+                                for (i, pname) in parts.iter().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        let mut visible = !self.part_hidden.get(i).copied().unwrap_or(false);
+                                        if ui.checkbox(&mut visible, "").on_hover_text("Teil anzeigen / ausblenden").changed() {
+                                            if let Some(h) = self.part_hidden.get_mut(i) {
+                                                *h = !visible;
+                                            }
+                                            vis_changed = true;
+                                        }
+                                        if ui.selectable_label(self.avatar_part == Some(i), pname).clicked() {
+                                            pick = Some(Some(i));
+                                        }
+                                    });
+                                }
+                            });
+                        if let Some(p) = pick {
+                            self.avatar_selected = true;
+                            self.editor.sel = Sel::None;
+                            self.select_part(p);
+                        }
+                        if vis_changed {
+                            self.parts_changed(&ctx);
+                        }
                     }
                     None => {
                         if ui.button("Avatar laden …").clicked() {
@@ -622,6 +687,50 @@ impl StoffwerkApp {
                 ui.set_width(ui.available_width());
                 if self.editor.properties_ui(ui, &mut self.doc) {
                     return;
+                }
+                // Angeklickter Teil des Avatars
+                if let (Some(a), Some(pi)) = (&self.avatar, self.avatar_part) {
+                    if let Some(part) = a.parts.get(pi) {
+                        let tex = part.texture.and_then(|t| a.textures.get(t));
+                        let mut hidden = self.part_hidden.get(pi).copied().unwrap_or(false);
+                        ui.label(RichText::new("Avatar-Teil").weak().small());
+                        egui::Grid::new("part-props").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                            ui.label("Name");
+                            ui.label(&part.name);
+                            ui.end_row();
+                            ui.label("Dreiecke");
+                            ui.label((part.count / 3).to_string());
+                            ui.end_row();
+                            ui.label("Textur");
+                            ui.label(match tex {
+                                Some(t) => format!("{} × {}", t.width, t.height),
+                                None => "keine".into(),
+                            });
+                            ui.end_row();
+                            ui.label("Ausgestanzt");
+                            ui.label(if part.cutout { "ja (durchsichtige Stellen)" } else { "nein" });
+                            ui.end_row();
+                        });
+                        ui.add_space(6.0);
+                        let toggled = ui
+                            .checkbox(&mut hidden, "Ausblenden")
+                            .on_hover_text("Zum Beispiel Haare oder mitgelieferte Kleidung, die beim Anpassen stören")
+                            .changed();
+                        let any_hidden = self.part_hidden.iter().any(|h| *h);
+                        let show_all = ui.add_enabled(any_hidden, egui::Button::new("Alle Teile einblenden")).clicked();
+                        if toggled {
+                            if let Some(h) = self.part_hidden.get_mut(pi) {
+                                *h = hidden;
+                            }
+                        }
+                        if show_all {
+                            self.part_hidden.iter_mut().for_each(|h| *h = false);
+                        }
+                        if toggled || show_all {
+                            self.parts_changed(&ctx);
+                        }
+                        return;
+                    }
                 }
                 match (&self.avatar, self.avatar_selected) {
                     (Some(a), true) => {
@@ -869,6 +978,9 @@ impl eframe::App for StoffwerkApp {
 
         if self.editor.sel != Sel::None {
             self.avatar_selected = false;
+            if self.avatar_part.is_some() {
+                self.select_part(None);
+            }
         }
 
         // Erst nach dem Zeichnen: das Menü ist dann zu, der Dialog blockiert nicht mitten im Aufbau
@@ -919,4 +1031,18 @@ impl eframe::App for StoffwerkApp {
 
 fn i_shift(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.modifiers.shift)
+}
+
+/// Symbolzeile, die oben links über einer Ansicht schwebt (wie im Original)
+fn overlay(ui: &mut egui::Ui, rect: egui::Rect, add: impl FnOnce(&mut egui::Ui)) {
+    let r = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2((rect.width() - 12.0).max(10.0), 30.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    egui::Frame::NONE
+        .fill(Color32::from_rgba_unmultiplied(30, 32, 36, 170))
+        .corner_radius(5.0)
+        .inner_margin(egui::Margin::same(2))
+        .show(&mut child, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.horizontal(add);
+        });
 }

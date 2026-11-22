@@ -6,7 +6,7 @@ struct Globals {
 };
 
 struct Material {
-    // x: Ausstanzen (1 = Pixel unter 50 % Deckkraft weglassen), y: Textur vorhanden
+    // x: Ausstanzen (1 = Pixel unter 50 % Deckkraft weglassen), y: Textur vorhanden, z: ausgewählt
     flags: vec4<f32>,
 };
 
@@ -60,7 +60,11 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
     let h = normalize(key + view_dir);
     let spec = pow(max(dot(n, h), 0.0), 32.0) * 0.08;
     let albedo = i.color * t.rgb;
-    let c = albedo * (hemi + vec3<f32>(diff)) + vec3<f32>(spec);
+    var c = albedo * (hemi + vec3<f32>(diff)) + vec3<f32>(spec);
+    // Ausgewählter Teil: hellgelb überlagert, Form bleibt erkennbar
+    if (mat.flags.z > 0.5) {
+        c = mix(c, vec3<f32>(1.0, 0.96, 0.62) * (0.55 + 0.45 * diff), 0.7);
+    }
     return vec4<f32>(c, 1.0);
 }
 

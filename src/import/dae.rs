@@ -266,6 +266,8 @@ impl<'a, 'i> Ctx<'a, 'i> {
                 }
             }
             self.out.close_part(first, texture, cutout);
+            let gname = geom.attribute("name").or(geom.attribute("id")).unwrap_or("");
+            self.out.name_part(first, &[gname, prim.attribute("material").unwrap_or("")]);
         }
     }
 

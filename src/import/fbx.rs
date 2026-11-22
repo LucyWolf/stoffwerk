@@ -66,6 +66,7 @@ pub fn load(path: &Path, import: &super::ImportOptions) -> Result<AvatarMesh> {
                 }
             }
             out.close_part(first, texture, cutout);
+            out.name_part(first, &[&node.element.name, mat.map(|m| &*m.element.name).unwrap_or("")]);
         }
     }
 

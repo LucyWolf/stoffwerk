@@ -47,6 +47,7 @@ pub fn load(path: &Path) -> Result<AvatarMesh> {
         let first = out.indices.len();
         out.indices.extend(mesh.indices.iter().map(|i| base_vertex + i));
         out.close_part(first, texture, cutout);
+        out.name_part(first, &[&m.name, mat.map(|x| x.name.as_str()).unwrap_or("")]);
     }
     out.textures = cache.textures;
     out.warnings.extend(cache.missing.iter().map(|m| format!("Textur fehlt: {m}")));

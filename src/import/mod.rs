@@ -28,6 +28,8 @@ pub struct Part {
     pub texture: Option<usize>,
     /// Pixel mit wenig Deckkraft werden weggelassen (Haarsträhnen, Wimpern, Spitze)
     pub cutout: bool,
+    /// Name aus der Datei (Netz/Material), für Objektliste und Eigenschaften
+    pub name: String,
 }
 
 pub struct AvatarMesh {
@@ -84,7 +86,15 @@ impl AvatarMesh {
     pub fn close_part(&mut self, first: usize, texture: Option<usize>, cutout: bool) {
         let count = self.indices.len() - first;
         if count > 0 {
-            self.parts.push(Part { first: first as u32, count: count as u32, texture, cutout });
+            self.parts.push(Part { first: first as u32, count: count as u32, texture, cutout, name: String::new() });
+        }
+    }
+
+    /// Gibt dem zuletzt ab `first` angelegten Teil einen Namen; mehrere Namensteile werden mit „ – “ verbunden
+    pub fn name_part(&mut self, first: usize, names: &[&str]) {
+        let name = names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()).collect::<Vec<_>>().join(" – ");
+        if let Some(p) = self.parts.iter_mut().rev().find(|p| p.first as usize == first) {
+            p.name = name;
         }
     }
 }
@@ -166,6 +176,52 @@ impl ImportOptions {
     }
 }
 
+impl AvatarMesh {
+    /// Welcher Teil liegt unter dem Strahl? Ausgeblendete Teile zählen nicht.
+    pub fn pick(&self, origin: Vec3, dir: Vec3, hidden: &[bool]) -> Option<(usize, Vec3)> {
+        let mut best: Option<(f32, usize)> = None;
+        for (pi, part) in self.parts.iter().enumerate() {
+            if hidden.get(pi).copied().unwrap_or(false) {
+                continue;
+            }
+            let range = part.first as usize..(part.first + part.count) as usize;
+            for t in self.indices[range].chunks_exact(3) {
+                let (a, b, c) = (self.positions[t[0] as usize], self.positions[t[1] as usize], self.positions[t[2] as usize]);
+                if let Some(d) = ray_triangle(origin, dir, a, b, c) {
+                    if best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, pi));
+                    }
+                }
+            }
+        }
+        best.map(|(d, pi)| (pi, origin + dir * d))
+    }
+}
+
+/// Möller–Trumbore: Abstand entlang des Strahls bis zum Dreieck, beidseitig
+fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let e1 = b - a;
+    let e2 = c - a;
+    let p = d.cross(e2);
+    let det = e1.dot(p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = o - a;
+    let u = s.dot(p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = d.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(q) * inv;
+    (t > 1e-6).then_some(t)
+}
+
 pub fn load(path: &Path, opts: &ImportOptions) -> Result<AvatarMesh> {
     let ext = path
         .extension()
@@ -202,7 +258,19 @@ pub fn load(path: &Path, opts: &ImportOptions) -> Result<AvatarMesh> {
 /// Fehlende Normalen berechnen, Achsen und Einheit anwenden, Füße auf den Boden.
 fn finish(mesh: &mut AvatarMesh, opts: &ImportOptions) {
     if mesh.parts.is_empty() {
-        mesh.parts.push(Part { first: 0, count: mesh.indices.len() as u32, texture: None, cutout: false });
+        mesh.parts.push(Part { first: 0, count: mesh.indices.len() as u32, texture: None, cutout: false, name: String::new() });
+    }
+    // Teile ohne Namen durchnummerieren, gleiche Namen unterscheidbar machen
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, p) in mesh.parts.iter_mut().enumerate() {
+        if p.name.is_empty() {
+            p.name = format!("Teil {}", i + 1);
+        }
+        let n = seen.entry(p.name.clone()).or_insert(0);
+        *n += 1;
+        if *n > 1 {
+            p.name = format!("{} ({})", p.name, n);
+        }
     }
 
     let missing: Vec<bool> = mesh.normals.iter().map(|n| *n == Vec3::ZERO || !n.is_finite()).collect();
@@ -322,6 +390,20 @@ mod tests {
         let m = load(&datei("figur.glb"), &o).unwrap();
         assert!((m.height() - 0.875).abs() < 1e-3);
         assert!(m.min.y.abs() < 1e-4); // Figur steht in der Datei schon auf 0
+    }
+
+    #[test]
+    fn klick_trifft_den_richtigen_teil() {
+        let m = load(&datei("figur.glb"), &ImportOptions::default()).unwrap();
+        // Teil 1 ist der Kopf (1,52–1,75 m). Strahl von vorn auf Kopfhöhe trifft ihn, auf Bauchhöhe nicht
+        let kopf = m.pick(Vec3::new(0.0, 1.6, 5.0), Vec3::NEG_Z, &[]).unwrap();
+        assert_eq!(kopf.0, 1);
+        assert!((kopf.1.z - 0.11).abs() < 1e-3, "{}", kopf.1);
+        let bauch = m.pick(Vec3::new(0.0, 1.2, 5.0), Vec3::NEG_Z, &[]).unwrap();
+        assert_eq!(bauch.0, 0);
+        // Ausgeblendeter Kopf: der Strahl geht durch
+        assert!(m.pick(Vec3::new(0.0, 1.6, 5.0), Vec3::NEG_Z, &[false, true]).is_none());
+        assert!(m.pick(Vec3::new(3.0, 1.6, 5.0), Vec3::NEG_Z, &[]).is_none());
     }
 
     #[test]

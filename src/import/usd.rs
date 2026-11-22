@@ -244,6 +244,8 @@ impl Ctx<'_> {
             }
         }
         self.out.close_part(first, texture, cutout);
+        let pname = prim.path().name().map(|n| n.to_string()).unwrap_or_default();
+        self.out.name_part(first, &[&pname]);
     }
 
     /// material:binding → Material → UsdPreviewSurface → diffuseColor (Farbe oder UsdUVTexture)

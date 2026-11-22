@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.7
+
+**Avatar-Teile anklicken**
+- Ein Klick auf den Avatar in der 3D-Ansicht markiert den getroffenen Teil hellgelb, etwa den Oberkörper, die Haare oder ein mitgeliefertes Kleidungsstück. Ein Klick daneben hebt die Markierung auf. Ziehen dreht weiterhin die Kamera.
+- Die Eigenschaften zeigen dann Name, Dreiecke, Texturgröße und ob der Teil ausgestanzt ist.
+- Teile lassen sich ausblenden, einzeln in den Eigenschaften oder über die Häkchen in der Objektliste. Gedacht für Haare oder mitgelieferte Kleidung, die beim Anpassen stören. Ausgeblendete Teile verschwinden auch aus der Silhouette im Schnittfenster und lassen sich nicht anklicken.
+- In der Objektliste stehen unter dem Avatar alle Teile mit den Namen aus der Datei (Netz und Material). Teile ohne Namen werden durchnummeriert.
+
+**Anzeige-Symbole über den Ansichten**
+- Die Schalter für Avatar, Texturen, Boden, Schatten und Bildschirmfoto schweben jetzt wie im Original oben links über der 3D-Ansicht, die für Silhouette, Namen, Kantenlängen und Nähte über dem Schnittfenster. Die Leisten darüber enthalten nur noch die Werkzeuge.
+- Die Mausposition im Schnittfenster steht jetzt unten links.
+
+**Nicht geprüft**
+- Mit echten Avataren aus vielen Teilen. Getestet mit der Testfigur aus zwei Teilen.
+
 ## 0.1.6
 
 **Optik wie in Marvelous Designer**

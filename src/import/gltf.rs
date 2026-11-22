@@ -48,8 +48,9 @@ impl Ctx<'_> {
             // Bei Netzen mit Skelett gilt die Knoten-Transformation nicht, sondern die der Knochen.
             // In der Ruhepose ergibt das die Punkte, wie sie in der Datei stehen.
             let xf = if node.skin().is_some() { Mat4::IDENTITY } else { world };
+            let mname = mesh.name().or(node.name()).unwrap_or("").to_string();
             for prim in mesh.primitives() {
-                self.primitive(&prim, xf);
+                self.primitive(&prim, xf, &mname);
             }
         }
         for child in node.children() {
@@ -57,7 +58,7 @@ impl Ctx<'_> {
         }
     }
 
-    fn primitive(&mut self, prim: &gltf::Primitive, xf: Mat4) {
+    fn primitive(&mut self, prim: &gltf::Primitive, xf: Mat4, mesh_name: &str) {
         if prim.mode() != gltf::mesh::Mode::Triangles {
             return;
         }
@@ -106,6 +107,7 @@ impl Ctx<'_> {
             self.out.indices.extend([first_vertex + a, first_vertex + b, first_vertex + c]);
         }
         self.out.close_part(first, texture, cutout);
+        self.out.name_part(first, &[mesh_name, material.name().unwrap_or("")]);
     }
 
     fn texture(&mut self, image: gltf::Image) -> Option<usize> {

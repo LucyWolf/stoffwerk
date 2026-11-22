@@ -270,7 +270,7 @@ impl Editor {
     }
 
     /// Silhouette des Avatars von vorn, als Hintergrund im Schnittfenster
-    pub fn set_avatar(&mut self, ctx: &egui::Context, avatar: Option<&AvatarMesh>) {
+    pub fn set_avatar(&mut self, ctx: &egui::Context, avatar: Option<&AvatarMesh>, hidden: &[bool]) {
         self.silhouette = avatar.map(|a| {
             let res = 3.0; // Bildpunkte pro cm
             let min = Vec2::new(a.min.x, a.min.y) * 100.0;
@@ -281,9 +281,16 @@ impl Editor {
             let to_px = |p: glam::Vec3| {
                 Vec2::new((p.x * 100.0 - min.x) * res, (max.y - p.y * 100.0) * res)
             };
-            for t in a.indices.chunks_exact(3) {
-                let [p0, p1, p2] = [t[0], t[1], t[2]].map(|i| to_px(a.positions[i as usize]));
-                fill_triangle(&mut mask, w, h, p0, p1, p2);
+            // Ausgeblendete Teile (Haare, mitgelieferte Kleidung) gehören nicht zur Silhouette
+            for (pi, part) in a.parts.iter().enumerate() {
+                if hidden.get(pi).copied().unwrap_or(false) {
+                    continue;
+                }
+                let range = part.first as usize..(part.first + part.count) as usize;
+                for t in a.indices[range].chunks_exact(3) {
+                    let [p0, p1, p2] = [t[0], t[1], t[2]].map(|i| to_px(a.positions[i as usize]));
+                    fill_triangle(&mut mask, w, h, p0, p1, p2);
+                }
             }
             let pixels = mask
                 .iter()
@@ -717,8 +724,8 @@ impl Editor {
         // Mausposition und Werkzeughinweis
         if let Some(c) = hover_cm {
             painter.text(
-                rect.left_top() + EVec2::new(8.0, 6.0),
-                egui::Align2::LEFT_TOP,
+                rect.left_bottom() + EVec2::new(8.0, -6.0),
+                egui::Align2::LEFT_BOTTOM,
                 format!("x {:.1}  y {:.1} cm", c.x, c.y),
                 egui::FontId::monospace(11.0),
                 Color32::from_gray(70),

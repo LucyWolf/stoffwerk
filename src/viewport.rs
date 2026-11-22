@@ -47,6 +47,9 @@ struct GpuPart {
     first: u32,
     count: u32,
     material: wgpu::BindGroup,
+    flags: wgpu::Buffer,
+    base_flags: [f32; 4],
+    hidden: bool,
 }
 
 struct GpuMesh {
@@ -339,15 +342,11 @@ impl Viewport3D {
                 let tex = p.texture.and_then(|i| textures.get(i));
                 let has_tex = tex.is_some();
                 let view = tex.unwrap_or(&self.white);
+                let base_flags = [if p.cutout { 1.0f32 } else { 0.0 }, if has_tex { 1.0 } else { 0.0 }, 0.0, 0.0];
                 let flags = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("material"),
-                    contents: bytemuck::cast_slice(&[
-                        if p.cutout { 1.0f32 } else { 0.0 },
-                        if has_tex { 1.0 } else { 0.0 },
-                        0.0,
-                        0.0,
-                    ]),
-                    usage: wgpu::BufferUsages::UNIFORM,
+                    contents: bytemuck::cast_slice(&base_flags),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
                 let material = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("material"),
@@ -358,7 +357,7 @@ impl Viewport3D {
                         wgpu::BindGroupEntry { binding: 2, resource: flags.as_entire_binding() },
                     ],
                 });
-                GpuPart { first: p.first, count: p.count, material }
+                GpuPart { first: p.first, count: p.count, material, flags, base_flags, hidden: false }
             })
             .collect();
 
@@ -375,6 +374,17 @@ impl Viewport3D {
             }),
             parts,
         });
+    }
+
+    /// Auswahl und Sichtbarkeit der Avatar-Teile
+    pub fn set_part_state(&mut self, rs: &egui_wgpu::RenderState, selected: Option<usize>, hidden: &[bool]) {
+        let Some(avatar) = &mut self.avatar else { return };
+        for (i, part) in avatar.parts.iter_mut().enumerate() {
+            let mut f = part.base_flags;
+            f[2] = if selected == Some(i) { 1.0 } else { 0.0 };
+            rs.queue.write_buffer(&part.flags, 0, bytemuck::cast_slice(&f));
+            part.hidden = hidden.get(i).copied().unwrap_or(false);
+        }
     }
 
     /// Zeichnet die Szene in der gewünschten Größe (in echten Bildpunkten) und gibt die egui-Textur zurück.
@@ -464,7 +474,7 @@ impl Viewport3D {
             pass.set_pipeline(&self.shadow);
             pass.set_vertex_buffer(0, avatar.vertices.slice(..));
             pass.set_index_buffer(avatar.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for part in &avatar.parts {
+            for part in avatar.parts.iter().filter(|p| !p.hidden) {
                 pass.draw_indexed(part.first..part.first + part.count, 0, 0..1);
             }
         }
@@ -472,7 +482,7 @@ impl Viewport3D {
             pass.set_pipeline(&self.lit);
             pass.set_vertex_buffer(0, avatar.vertices.slice(..));
             pass.set_index_buffer(avatar.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for part in &avatar.parts {
+            for part in avatar.parts.iter().filter(|p| !p.hidden) {
                 pass.set_bind_group(1, &part.material, &[]);
                 pass.draw_indexed(part.first..part.first + part.count, 0, 0..1);
             }
