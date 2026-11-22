@@ -1,6 +1,7 @@
 //! Schnitt: Datenmodell, Editor und Projektdatei.
 
 pub mod editor;
+mod icons;
 pub mod model;
 
 use anyhow::{Context, Result, bail};

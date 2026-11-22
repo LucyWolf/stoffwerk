@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+**Symbolleiste im Schnittfenster**
+- Statt Textknöpfen gibt es kleine Strich-Symbole in einer Zeile, wie man es von Marvelous Designer kennt. Name, Kürzel und Kurzhilfe erscheinen beim Darüberfahren.
+- Die Symbole sind eigene Zeichnungen, nicht die Grafiken von Marvelous Designer, die CLO gehören. Sie werden als Vektoren gezeichnet und bleiben bei jeder Bildschirmskalierung scharf.
+
 ## 0.1.3
 
 Abschnitt 2: Der Schnitt-Editor. Im 2D-Fenster kann man jetzt Schnittteile zeichnen, bearbeiten und Nähte festlegen.

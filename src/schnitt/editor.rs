@@ -1,5 +1,6 @@
 //! 2D-Schnittfenster: Werkzeuge, Zeichnen, Bearbeiten, Nähen, Rechtsklick-Menü, Rückgängig.
 
+use super::icons::{self, Icon};
 use super::model::*;
 use crate::import::AvatarMesh;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, Sense, Stroke, Vec2 as EVec2};
@@ -39,6 +40,19 @@ impl Tool {
             Tool::Ellipse => "Kreis",
             Tool::InternalLine => "Innenlinie",
             Tool::Seam => "Naht",
+        }
+    }
+
+    fn icon(self) -> Icon {
+        match self {
+            Tool::Select => Icon::Select,
+            Tool::EditPoints => Icon::EditPoints,
+            Tool::AddPoint => Icon::AddPoint,
+            Tool::Polygon => Icon::Polygon,
+            Tool::Rect => Icon::Rect,
+            Tool::Ellipse => Icon::Ellipse,
+            Tool::InternalLine => Icon::InternalLine,
+            Tool::Seam => Icon::Seam,
         }
     }
 
@@ -281,19 +295,25 @@ impl Editor {
     // ---------------------------------------------------------------- Werkzeugleiste
 
     pub fn toolbar(&mut self, ui: &mut egui::Ui, doc: &mut Doc) {
+        ui.spacing_mut().item_spacing.x = 2.0;
         for t in Tool::ALL {
-            if ui.selectable_label(self.tool == t, t.label()).on_hover_text(t.help()).clicked() {
+            let tip = format!("{}\n{}", t.label(), t.help());
+            if icons::button(ui, t.icon(), self.tool == t, true, &tip).clicked() {
                 self.set_tool(t);
             }
         }
         ui.separator();
-        ui.toggle_value(&mut self.snap, "Raster").on_hover_text("Punkte rasten auf 0,5 cm ein (Strg hält es kurz aus)");
-        ui.toggle_value(&mut self.split, "Teilen").on_hover_text("Zwei Ansichten übereinander: Übersicht und Ausschnitt");
+        if icons::button(ui, Icon::Grid, self.snap, true, "Raster\nPunkte rasten auf 0,5 cm ein (Strg hält es kurz aus)").clicked() {
+            self.snap = !self.snap;
+        }
+        if icons::button(ui, Icon::Split, self.split, true, "Ansicht teilen\nZwei Ansichten übereinander: Übersicht und Ausschnitt").clicked() {
+            self.split = !self.split;
+        }
         ui.separator();
-        if ui.add_enabled(self.can_undo(), egui::Button::new("Rückgängig").small()).on_hover_text("Strg+Z").clicked() {
+        if icons::button(ui, Icon::Undo, false, self.can_undo(), "Rückgängig (Strg+Z)").clicked() {
             self.undo(doc);
         }
-        if ui.add_enabled(self.can_redo(), egui::Button::new("Wiederholen").small()).on_hover_text("Strg+Y").clicked() {
+        if icons::button(ui, Icon::Redo, false, self.can_redo(), "Wiederholen (Strg+Y)").clicked() {
             self.redo(doc);
         }
     }
