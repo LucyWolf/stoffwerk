@@ -199,7 +199,7 @@ impl AvatarMesh {
 }
 
 /// Möller–Trumbore: Abstand entlang des Strahls bis zum Dreieck, beidseitig
-fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+pub fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let e1 = b - a;
     let e2 = c - a;
     let p = d.cross(e2);

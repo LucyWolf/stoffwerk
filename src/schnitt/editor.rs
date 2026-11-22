@@ -1218,6 +1218,32 @@ impl Editor {
                     ui.label(p.pts.len().to_string());
                     ui.end_row();
                 });
+                // Simulation: Anfangslage und Stoffart
+                let mut placement = p.placement;
+                let mut fabric = p.fabric;
+                egui::Grid::new("piece-sim").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                    ui.label("Lage");
+                    egui::ComboBox::from_id_salt("lage").selected_text(placement.label()).show_ui(ui, |ui| {
+                        for v in crate::sim::Placement::ALL {
+                            ui.selectable_value(&mut placement, v, v.label());
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("Stoff");
+                    egui::ComboBox::from_id_salt("stoff").selected_text(fabric.label()).show_ui(ui, |ui| {
+                        for v in crate::sim::Fabric::ALL {
+                            ui.selectable_value(&mut fabric, v, v.label());
+                        }
+                    });
+                    ui.end_row();
+                });
+                if placement != p.placement || fabric != p.fabric {
+                    self.checkpoint(doc);
+                    if let Some(pm) = doc.piece_mut(id) {
+                        pm.placement = placement;
+                        pm.fabric = fabric;
+                    }
+                }
                 if let Some(link) = p.link {
                     let partner = doc.piece(link.partner).map(|x| x.name.clone()).unwrap_or_default();
                     ui.label(egui::RichText::new(format!("Symmetrisch verknüpft mit {partner}")).small());

@@ -5,6 +5,7 @@ mod app;
 mod import;
 mod camera;
 mod schnitt;
+mod sim;
 mod viewport;
 
 use eframe::egui;

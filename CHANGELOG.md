@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.8
+
+Abschnitt 3 beginnt: Die Stoffsimulation.
+
+**Schnittteile in 3D**
+- Jedes Schnittteil erscheint in der 3D-Ansicht, vernetzt mit etwa 2 cm Punktabstand (einstellbar unter Simulation > Punktabstand, 5–50 mm).
+- Lage pro Teil in den Eigenschaften: **Vorne** vor dem Avatar, **Hinten** dahinter (von hinten gesehen wie gezeichnet) oder **Oben (fallen lassen)** waagerecht über dem Avatar. Wo das Teil im Schnittfenster auf der Silhouette liegt, da liegt es auch in 3D.
+- Stoffart pro Teil: Baumwolle, Seide, Jeans, Strick (dehnbar), Leder. Sie unterscheiden sich in Gewicht, Steifigkeit, Dehnbarkeit und Reibung.
+
+**Simulation (Play)**
+- Play in der 3D-Leiste, die Leertaste oder Simulation > Starten: Der Stoff fällt, legt sich um den Avatar, die Nähte ziehen sich zusammen. Noch einmal hält an. Der Stoff behält dann seine Lage.
+- Zurücksetzen legt den Stoff wieder flach in die Anfangslage.
+- Nähte ziehen sich mit begrenzter Geschwindigkeit zusammen, nicht auf einen Schlag. Vorder- und Rückenteil, die 40 cm auseinander anfangen, schließen sich so ohne Ruck.
+- Kollision mit dem Avatar und dem Boden. Ausgeblendete Avatar-Teile, etwa Haare, zählen nicht. Der Stoff legt sich dann direkt auf den Kopf.
+- Ändert man den Schnitt, wird der Stoff neu aufgebaut.
+
+**Auswählen in 3D**
+- Ein Klick auf den Stoff wählt das Schnittteil aus, auch im 2D-Fenster und in den Eigenschaften. Es wird gelb markiert. Wird ein Teil im Schnitt ausgewählt, leuchtet es auch in 3D.
+
+**Noch nicht**
+- Der Stoff stößt sich nicht an sich selbst. Lagen können sich durchdringen, etwa ein Rock über einer Hose aus demselben Projekt.
+- Am Stoff mit der Maus ziehen, Anordnungspunkte um den Körper und Simulation auf der Grafikkarte kommen später.
+- Getestet mit einem Tuch über dem Kopf der Testfigur und automatischen Tests (Tuch fällt heil auf den Boden, Naht schließt sich von 42 cm auf unter 2 cm, Tuch bleibt auf dem Kopf liegen). Noch nicht mit einem ganzen Kleidungsstück an einem echten Avatar.
+
 ## 0.1.7
 
 **Avatar-Teile anklicken**

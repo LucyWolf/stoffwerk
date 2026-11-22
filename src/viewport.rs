@@ -58,6 +58,14 @@ struct GpuMesh {
     parts: Vec<GpuPart>,
 }
 
+/// Stoff: Netz bleibt, Punkte werden jedes Bild neu hochgeladen
+struct GpuCloth {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    vertex_count: usize,
+    pieces: Vec<(u64, GpuPart)>,
+}
+
 struct Target {
     size: [u32; 2],
     msaa: wgpu::TextureView,
@@ -80,6 +88,7 @@ pub struct Viewport3D {
     grid: wgpu::Buffer,
     grid_count: u32,
     avatar: Option<GpuMesh>,
+    cloth: Option<GpuCloth>,
     target: Option<Target>,
 }
 
@@ -316,6 +325,7 @@ impl Viewport3D {
             grid,
             grid_count: grid_vertices.len() as u32,
             avatar: None,
+            cloth: None,
             target: None,
         }
     }
@@ -374,6 +384,90 @@ impl Viewport3D {
             }),
             parts,
         });
+    }
+
+    /// Neues Stoffnetz (nach Änderungen am Schnitt)
+    pub fn set_cloth(&mut self, rs: &egui_wgpu::RenderState, cloth: Option<&crate::sim::Cloth>) {
+        self.cloth = cloth.filter(|c| !c.indices.is_empty()).map(|c| {
+            let device = &rs.device;
+            let pieces = c
+                .pieces
+                .iter()
+                .map(|p| {
+                    let base_flags = [0.0f32, 0.0, 0.0, 0.0];
+                    let flags = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("stoff"),
+                        contents: bytemuck::cast_slice(&base_flags),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+                    let material = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("stoff"),
+                        layout: &self.material_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: flags.as_entire_binding() },
+                        ],
+                    });
+                    (
+                        p.piece_id,
+                        GpuPart { first: p.index_range.start, count: p.index_range.end - p.index_range.start, material, flags, base_flags, hidden: false },
+                    )
+                })
+                .collect();
+            GpuCloth {
+                vertices: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("stoff-punkte"),
+                    size: (c.pos.len() * std::mem::size_of::<Vertex>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("stoff-dreiecke"),
+                    contents: bytemuck::cast_slice(&c.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }),
+                vertex_count: c.pos.len(),
+                pieces,
+            }
+        });
+        if let Some(c) = cloth {
+            self.update_cloth(rs, c);
+        }
+    }
+
+    /// Aktuelle Lage des Stoffs hochladen
+    pub fn update_cloth(&mut self, rs: &egui_wgpu::RenderState, cloth: &crate::sim::Cloth) {
+        let Some(g) = &self.cloth else { return };
+        if g.vertex_count != cloth.pos.len() {
+            return;
+        }
+        let normals = cloth.normals();
+        let mut color = vec![[1.0f32; 3]; cloth.pos.len()];
+        for p in &cloth.pieces {
+            for i in p.verts.clone() {
+                color[i as usize] = p.color;
+            }
+        }
+        let verts: Vec<Vertex> = (0..cloth.pos.len())
+            .map(|i| Vertex {
+                pos: cloth.pos[i].to_array(),
+                normal: normals[i].to_array(),
+                color: color[i],
+                uv: (cloth.uv[i] * 0.01).to_array(),
+            })
+            .collect();
+        rs.queue.write_buffer(&g.vertices, 0, bytemuck::cast_slice(&verts));
+    }
+
+    /// Ausgewähltes Schnittteil gelb markieren
+    pub fn set_cloth_selected(&mut self, rs: &egui_wgpu::RenderState, piece: Option<u64>) {
+        let Some(g) = &self.cloth else { return };
+        for (id, part) in &g.pieces {
+            let mut f = part.base_flags;
+            f[2] = if Some(*id) == piece { 1.0 } else { 0.0 };
+            rs.queue.write_buffer(&part.flags, 0, bytemuck::cast_slice(&f));
+        }
     }
 
     /// Auswahl und Sichtbarkeit der Avatar-Teile
@@ -475,6 +569,21 @@ impl Viewport3D {
             pass.set_vertex_buffer(0, avatar.vertices.slice(..));
             pass.set_index_buffer(avatar.indices.slice(..), wgpu::IndexFormat::Uint32);
             for part in avatar.parts.iter().filter(|p| !p.hidden) {
+                pass.draw_indexed(part.first..part.first + part.count, 0, 0..1);
+            }
+        }
+        if let (Some(c), true) = (&self.cloth, display.shadow) {
+            pass.set_pipeline(&self.shadow);
+            pass.set_vertex_buffer(0, c.vertices.slice(..));
+            pass.set_index_buffer(c.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..(c.indices.size() / 4) as u32, 0, 0..1);
+        }
+        if let Some(c) = &self.cloth {
+            pass.set_pipeline(&self.lit);
+            pass.set_vertex_buffer(0, c.vertices.slice(..));
+            pass.set_index_buffer(c.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for (_, part) in &c.pieces {
+                pass.set_bind_group(1, &part.material, &[]);
                 pass.draw_indexed(part.first..part.first + part.count, 0, 0..1);
             }
         }

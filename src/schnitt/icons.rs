@@ -32,6 +32,10 @@ pub enum Icon {
     // 2D-Anzeige
     Names,
     Ruler,
+    // Simulation
+    Play,
+    Pause,
+    Reset,
     // Fensteraufteilung
     LayoutBoth,
     Layout3D,
@@ -246,6 +250,25 @@ fn draw(p: &egui::Painter, r: Rect, icon: Icon, c: Color32) {
                     p.text(r.center(), egui::Align2::CENTER_CENTER, "2D", egui::FontId::proportional(r.height() * 0.5), c);
                 }
             }
+        }
+        Icon::Play => {
+            p.add(Shape::convex_polygon(vec![at(0.15, 0.0), at(0.95, 0.5), at(0.15, 1.0)], Color32::from_rgb(120, 220, 120), Stroke::NONE));
+        }
+        Icon::Pause => {
+            p.rect_filled(Rect::from_min_max(at(0.15, 0.05), at(0.4, 0.95)), 1.0, Color32::from_rgb(255, 190, 80));
+            p.rect_filled(Rect::from_min_max(at(0.6, 0.05), at(0.85, 0.95)), 1.0, Color32::from_rgb(255, 190, 80));
+        }
+        Icon::Reset => {
+            let arc: Vec<(f32, f32)> = (0..=16)
+                .map(|i| {
+                    let a = std::f32::consts::PI * 0.25 + std::f32::consts::PI * 1.5 * (i as f32 / 16.0);
+                    (0.5 + 0.42 * a.cos(), 0.5 - 0.42 * a.sin())
+                })
+                .collect();
+            poly(&arc, false, s);
+            let tip = arc[arc.len() - 1];
+            line(tip, (tip.0 + 0.3, tip.1), s);
+            line(tip, (tip.0 + 0.05, tip.1 - 0.28), s);
         }
         Icon::Undo | Icon::Redo => {
             // Bogen mit Pfeilspitze; Wiederholen ist gespiegelt

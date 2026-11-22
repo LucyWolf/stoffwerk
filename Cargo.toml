@@ -1,6 +1,6 @@
 [package]
 name = "stoffwerk"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 description = "Kleidung für VRChat-Avatare: Schnittmuster zeichnen, nähen, simulieren, exportieren"
 license = "MIT"
@@ -15,6 +15,8 @@ ufbx = "0.11"
 image = "0.25"
 psd = "0.3"
 roxmltree = "0.20"
+spade = "2"
+rayon = "1"
 openusd = "0.9"
 ogawa-rs = "0.4"
 rfd = "0.18"
@@ -27,6 +29,8 @@ env_logger = "0.11"
 [profile.dev]
 # Spart mehrere GB im target-Ordner; für Fehlermeldungen mit Zeilennummern reicht das
 debug = "line-tables-only"
+# Die Simulation ist ohne Optimierung zehnmal zu langsam zum Ausprobieren
+opt-level = 1
 incremental = false
 
 [profile.dev.package."*"]

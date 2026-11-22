@@ -3,6 +3,7 @@ use crate::import::{self, AvatarMesh, ImportOptions, Unit};
 use crate::schnitt::{self, Doc, Editor, editor::Sel};
 use crate::schnitt::editor::Tool;
 use crate::schnitt::icons::{self, Icon};
+use crate::sim::{Body, Cloth, Collider};
 use crate::viewport::{Display, Viewport3D};
 use eframe::egui::{self, Color32, RichText, Sense};
 use eframe::egui_wgpu;
@@ -49,6 +50,14 @@ pub struct StoffwerkApp {
     import_dialog: Option<(PathBuf, ImportOptions)>,
     display: Display,
     layout: Layout,
+    /// Stoff in 3D und ob er gerade simuliert wird
+    cloth: Option<Cloth>,
+    cloth_hash: u64,
+    collider: Option<Collider>,
+    playing: bool,
+    pointer_over_2d: bool,
+    /// Zuletzt in 3D markiertes Schnittteil (für die gelbe Markierung)
+    cloth_selected: Option<u64>,
     /// Angeklickter Teil des Avatars (gelb markiert)
     avatar_part: Option<usize>,
     /// Ausgeblendete Teile des Avatars (z. B. Haare, mitgelieferte Kleidung)
@@ -93,6 +102,12 @@ impl StoffwerkApp {
             layout: Layout::Both,
             avatar_part: None,
             part_hidden: Vec::new(),
+            cloth: None,
+            cloth_hash: 0,
+            collider: None,
+            playing: false,
+            pointer_over_2d: false,
+            cloth_selected: None,
             avatar_selected: false,
             loading: None,
             error: None,
@@ -150,6 +165,8 @@ impl StoffwerkApp {
                 self.part_hidden = vec![false; mesh.parts.len()];
                 self.avatar_part = None;
                 self.editor.set_avatar(ctx, Some(&mesh), &self.part_hidden);
+                self.collider = Some(Collider::new(&mesh, &self.part_hidden));
+                self.cloth_hash = 0; // Stoff neu am Avatar anlegen
                 self.avatar = Some(mesh);
                 if self.avatar_path.as_ref() != Some(&path) || self.avatar_opts != opts {
                     self.editor.dirty = true;
@@ -170,6 +187,8 @@ impl StoffwerkApp {
         self.editor.set_avatar(ctx, None, &[]);
         self.part_hidden.clear();
         self.avatar_part = None;
+        self.collider = None;
+        self.cloth_hash = 0;
         self.editor.dirty = true;
     }
 
@@ -373,6 +392,30 @@ impl StoffwerkApp {
                 }
                 ui.checkbox(&mut self.editor.show_seams, "Nähte anzeigen");
             });
+            ui.menu_button("Simulation", |ui| {
+                let label = if self.playing { "Anhalten" } else { "Starten" };
+                if ui.add_enabled(self.cloth.is_some(), egui::Button::new(label).shortcut_text("Leertaste")).clicked() {
+                    self.playing = !self.playing;
+                    ui.close();
+                }
+                if ui.add_enabled(self.cloth.is_some(), egui::Button::new("Zurücksetzen")).clicked() {
+                    self.reset_cloth();
+                    ui.close();
+                }
+                ui.separator();
+                let mut mm = if self.doc.particle_mm > 0.0 { self.doc.particle_mm } else { 20.0 };
+                ui.horizontal(|ui| {
+                    ui.label("Punktabstand");
+                    if ui
+                        .add(egui::Slider::new(&mut mm, 5.0..=50.0).suffix(" mm").step_by(1.0))
+                        .on_hover_text("Kleiner = feinere Falten, aber langsamer")
+                        .changed()
+                    {
+                        self.doc.particle_mm = mm;
+                        self.editor.dirty = true;
+                    }
+                });
+            });
             ui.menu_button("Avatar", |ui| {
                 if ui.button("Importieren …").clicked() {
                     self.open_avatar_dialog(&ctx);
@@ -445,6 +488,11 @@ impl StoffwerkApp {
                     RichText::new(format!("{}  ·  {} Dreiecke  ·  {:.2} m", a.name, a.triangle_count(), a.height())).weak().small(),
                 );
             }
+            if let Some(c) = &self.cloth {
+                ui.separator();
+                let state = if self.playing { "Simulation läuft" } else { "Simulation angehalten" };
+                ui.label(RichText::new(format!("{state}  ·  {} Punkte  ·  {:.1} s", c.particle_count(), c.time)).weak().small());
+            }
             if let Some(info) = &self.info {
                 ui.separator();
                 ui.label(RichText::new(info).weak().small());
@@ -502,6 +550,18 @@ impl StoffwerkApp {
             if icons::button(ui, Icon::Frame, false, true, "Kamera auf den Avatar (Doppelklick)").clicked() {
                 frame = true;
             }
+            ui.separator();
+            let (icon, tip) = if self.playing {
+                (Icon::Pause, "Simulation anhalten (Leertaste)")
+            } else {
+                (Icon::Play, "Simulation starten (Leertaste): Stoff fällt, Nähte ziehen sich zusammen")
+            };
+            if icons::button(ui, icon, self.playing, self.cloth.is_some(), tip).clicked() {
+                self.playing = !self.playing;
+            }
+            if icons::button(ui, Icon::Reset, false, self.cloth.is_some(), "Stoff zurücksetzen: wieder flach in die Anfangslage").clicked() {
+                self.reset_cloth();
+            }
         });
         if frame {
             self.frame_avatar();
@@ -535,7 +595,21 @@ impl StoffwerkApp {
                 let ndc = egui::vec2((pos.x - rect.left()) / rect.width() * 2.0 - 1.0, 1.0 - (pos.y - rect.top()) / rect.height() * 2.0);
                 let (o, d) = self.camera.ray(glam::Vec2::new(ndc.x, ndc.y), rect.width() / rect.height().max(1.0));
                 let hit = self.avatar.as_ref().filter(|_| self.display.avatar).and_then(|a| a.pick(o, d, &self.part_hidden));
-                self.select_part(hit.map(|h| h.0));
+                let cloth_hit = self.cloth.as_ref().and_then(|c| c.pick(o, d));
+                let avatar_dist = hit.map(|h| h.1.distance(o));
+                match (cloth_hit, avatar_dist) {
+                    // Stoff liegt vorn: Schnittteil auswählen (auch im 2D-Fenster)
+                    (Some((id, cd)), ad) if ad.is_none_or(|ad| cd <= ad) => {
+                        self.select_part(None);
+                        self.editor.sel = Sel::Piece(id);
+                    }
+                    _ => {
+                        if hit.is_none() {
+                            self.editor.sel = Sel::None;
+                        }
+                        self.select_part(hit.map(|h| h.0));
+                    }
+                }
             }
         }
 
@@ -607,12 +681,49 @@ impl StoffwerkApp {
     fn parts_changed(&mut self, ctx: &egui::Context) {
         self.viewport.set_part_state(&self.rs, self.avatar_part, &self.part_hidden);
         self.editor.set_avatar(ctx, self.avatar.as_ref(), &self.part_hidden);
+        self.collider = self.avatar.as_ref().map(|a| Collider::new(a, &self.part_hidden));
+    }
+
+    /// Stoff neu aufbauen, wenn sich der Schnitt geändert hat; während Play einen Schritt simulieren
+    fn update_cloth(&mut self, ctx: &egui::Context) {
+        let hash = self.doc.sim_hash();
+        if hash != self.cloth_hash {
+            self.cloth_hash = hash;
+            let body = self.avatar.as_ref().map(|a| Body { min: a.min, max: a.max }).unwrap_or_default();
+            let cloth = Cloth::build(&self.doc, body, self.doc.particle_cm());
+            self.cloth = (!cloth.indices.is_empty()).then_some(cloth);
+            self.viewport.set_cloth(&self.rs, self.cloth.as_ref());
+            self.cloth_selected = None;
+        }
+        if self.playing {
+            if let Some(c) = &mut self.cloth {
+                c.step(self.collider.as_ref().filter(|_| self.display.avatar));
+                self.viewport.update_cloth(&self.rs, c);
+            }
+            ctx.request_repaint();
+        }
+        // Gelbe Markierung folgt der Auswahl im Schnitt
+        let sel = match self.editor.sel {
+            Sel::Piece(id) | Sel::Point { piece: id, .. } => Some(id),
+            Sel::Segment(s) => Some(s.piece),
+            _ => None,
+        };
+        if sel != self.cloth_selected {
+            self.cloth_selected = sel;
+            self.viewport.set_cloth_selected(&self.rs, sel);
+        }
+    }
+
+    fn reset_cloth(&mut self) {
+        self.cloth_hash = 0;
+        self.playing = false;
     }
 
     fn view_2d(&mut self, ui: &mut egui::Ui) {
         let (editor, doc) = (&mut self.editor, &mut self.doc);
         Self::header(ui, "2D-Schnitt", |ui, _| editor.toolbar(ui, doc));
         let area = ui.available_rect_before_wrap();
+        self.pointer_over_2d = ui.ctx().pointer_hover_pos().is_some_and(|p| area.contains(p));
         self.editor.ui(ui, &mut self.doc);
         let editor = &mut self.editor;
         overlay(ui, area, |ui| editor.display_toolbar(ui));
@@ -950,6 +1061,15 @@ impl eframe::App for StoffwerkApp {
         if open {
             self.open_project_dialog(&ctx);
         }
+
+        // Leertaste startet/stoppt die Simulation, außer beim Tippen und über dem Schnittfenster (dort verschiebt sie)
+        let space = ctx.input(|i| i.key_pressed(egui::Key::Space));
+        if space && !ctx.egui_wants_keyboard_input() && !self.pointer_over_2d && self.cloth.is_some() {
+            self.playing = !self.playing;
+            // Sonst löst die Leertaste zusätzlich einen gerade fokussierten Knopf aus
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+        }
+        self.update_cloth(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
         egui::Panel::bottom("status").show(ui, |ui| self.status(ui));

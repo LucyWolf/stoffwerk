@@ -41,6 +41,11 @@ pub struct Piece {
     /// Symmetrisch verknüpfter Partner: Änderungen an einem Teil erscheinen gespiegelt am anderen
     #[serde(default)]
     pub link: Option<Link>,
+    /// Anfangslage für die Simulation
+    #[serde(default)]
+    pub placement: crate::sim::Placement,
+    #[serde(default)]
+    pub fabric: crate::sim::Fabric,
 }
 
 /// Eine Kante zwischen zwei Eckpunkten, gekennzeichnet durch die ID ihres Anfangspunkts
@@ -64,6 +69,9 @@ pub struct Doc {
     pub pieces: Vec<Piece>,
     pub seams: Vec<Seam>,
     pub next_id: u64,
+    /// Punktabstand des Simulationsnetzes in mm (Marvelous Designer: „Particle Distance“); 0 = Vorgabe 20
+    #[serde(default)]
+    pub particle_mm: f32,
 }
 
 /// Eine Kante zum Zeichnen und Messen
@@ -74,6 +82,32 @@ pub struct Segment {
 }
 
 impl Doc {
+    pub fn particle_cm(&self) -> f32 {
+        if self.particle_mm > 0.0 { self.particle_mm * 0.1 } else { 2.0 }
+    }
+
+    /// Ändert sich, sobald sich an Form, Lage, Stoff oder Nähten etwas ändert – dann wird der Stoff neu aufgebaut
+    pub fn sim_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for p in &self.pieces {
+            p.id.hash(&mut h);
+            for pt in &p.pts {
+                pt.id.hash(&mut h);
+                pt.p.x.to_bits().hash(&mut h);
+                pt.p.y.to_bits().hash(&mut h);
+                pt.curve.hash(&mut h);
+            }
+            (p.placement as u8).hash(&mut h);
+            (p.fabric as u8).hash(&mut h);
+        }
+        for s in &self.seams {
+            (s.a, s.b, s.flip).hash(&mut h);
+        }
+        self.particle_mm.to_bits().hash(&mut h);
+        h.finish()
+    }
+
     pub fn new_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
@@ -90,7 +124,7 @@ impl Doc {
     pub fn add_piece(&mut self, name: &str, corners: &[(Vec2, bool)]) -> u64 {
         let id = self.new_id();
         let pts = corners.iter().map(|&(p, curve)| Pt { id: self.new_id(), p, curve }).collect();
-        let mut piece = Piece { id, name: name.to_string(), pts, lines: Vec::new(), link: None };
+        let mut piece = Piece { id, name: name.to_string(), pts, lines: Vec::new(), link: None, placement: Default::default(), fabric: Default::default() };
         piece.make_ccw();
         self.pieces.push(piece);
         id
@@ -150,7 +184,7 @@ impl Doc {
         let axis = max.x + 2.5;
         let name = format!("{} (gespiegelt)", src.name);
         let new_id = self.new_id();
-        self.pieces.push(Piece { id: new_id, name, pts: Vec::new(), lines: Vec::new(), link: None });
+        self.pieces.push(Piece { id: new_id, name, pts: Vec::new(), lines: Vec::new(), link: None, placement: Default::default(), fabric: Default::default() });
         self.piece_mut(id)?.link = Some(Link { partner: new_id, axis });
         self.piece_mut(new_id)?.link = Some(Link { partner: id, axis });
         self.sync_partner(id);
@@ -185,6 +219,9 @@ impl Doc {
             .iter()
             .map(|l| InternalLine { id: l.id ^ MIRROR_BIT, pts: l.pts.iter().map(|&p| mirror(p)).collect() })
             .collect();
+        // Gleicher Stoff und gleiche Lage wie das Original
+        dst.fabric = src.fabric;
+        dst.placement = src.placement;
         self.cleanup_seams();
     }
 

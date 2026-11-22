@@ -9,7 +9,7 @@ Du zeichnest Schnittteile in 2D wie beim echten Nähen, legst fest, welche Kante
 - **Fertig für VRChat.** Avatar als VRM laden, beim Export werden die Gewichte vom Skelett übernommen – die Kleidung bewegt sich mit.
 - **Linux und Windows, kostenlos.**
 
-> **Stand:** frühe Entwicklung. Bisher: Avatar laden und ansehen, Schnittteile zeichnen und Nähte festlegen. Simulation und Export folgen.
+> **Stand:** frühe Entwicklung. Bisher: Avatar laden und ansehen, Schnittteile zeichnen, Nähte festlegen und den Stoff auf den Avatar fallen lassen (Simulation). Export folgt.
 
 ## Installieren
 
@@ -46,6 +46,10 @@ Gebraucht wird eine Grafikkarte mit Vulkan (Linux) bzw. DirectX 12 oder Vulkan (
 | Rechteck / Kreis | S / E | aufziehen; Umschalt = exakter Kreis |
 | Innenlinie | I | in ein Teil klicken, Enter oder Doppelklick beendet |
 | Naht | N | Kante, dann Gegenkante – jeweils nahe dem Ende, das zusammengehört |
+
+### Simulation
+
+In den Eigenschaften eines Schnittteils legt **Lage** fest, wo es anfängt (vorne, hinten oder oben zum Fallenlassen), und **Stoff**, wie es sich verhält. **Leertaste** oder Play in der 3D-Leiste startet die Simulation: Der Stoff fällt, Nähte ziehen sich zusammen. Zurücksetzen legt ihn wieder flach hin.
 
 Rechtsklick auf ein Teil: duplizieren, **symmetrisch kopieren** (die Kopie folgt jeder Änderung gespiegelt), spiegeln, drehen, löschen. Strg+Z / Strg+Y für Rückgängig und Wiederholen, Entf löscht die Auswahl.
 
