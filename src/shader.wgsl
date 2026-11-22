@@ -3,12 +3,21 @@ struct Globals {
     eye: vec4<f32>,
 };
 
+struct Material {
+    // x: Ausstanzen (1 = Pixel unter 50 % Deckkraft weglassen)
+    flags: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> g: Globals;
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+@group(1) @binding(2) var<uniform> mat: Material;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    @location(3) uv: vec2<f32>,
 };
 
 struct VsOut {
@@ -16,6 +25,7 @@ struct VsOut {
     @location(0) world: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    @location(3) uv: vec2<f32>,
 };
 
 @vertex
@@ -25,12 +35,17 @@ fn vs_main(v: VsIn) -> VsOut {
     o.world = v.pos;
     o.normal = v.normal;
     o.color = v.color;
+    o.uv = v.uv;
     return o;
 }
 
 // Weiches Studiolicht: Hauptlicht schräg von vorn oben, Gegenlicht, Himmel/Boden-Umgebung.
 @fragment
 fn fs_lit(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, samp, i.uv);
+    if (mat.flags.x > 0.5 && t.a < 0.5) {
+        discard;
+    }
     var n = normalize(i.normal);
     if (!front) { n = -n; }
     let view_dir = normalize(g.eye.xyz - i.world);
@@ -39,8 +54,9 @@ fn fs_lit(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32
     let hemi = mix(vec3<f32>(0.32, 0.30, 0.28), vec3<f32>(0.55, 0.58, 0.65), n.y * 0.5 + 0.5);
     let diff = max(dot(n, key), 0.0) * 0.75 + max(dot(n, rim), 0.0) * 0.25;
     let h = normalize(key + view_dir);
-    let spec = pow(max(dot(n, h), 0.0), 32.0) * 0.12;
-    let c = i.color * (hemi + vec3<f32>(diff)) + vec3<f32>(spec);
+    let spec = pow(max(dot(n, h), 0.0), 32.0) * 0.08;
+    let albedo = i.color * t.rgb;
+    let c = albedo * (hemi + vec3<f32>(diff)) + vec3<f32>(spec);
     return vec4<f32>(c, 1.0);
 }
 

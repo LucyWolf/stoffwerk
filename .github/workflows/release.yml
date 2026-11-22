@@ -41,6 +41,9 @@ jobs:
       - name: Fertiges Programm prüfen
         run: |
           ./target/release/stoffwerk --version
+          # Jede Testfigur muss laden und 1,75 m hoch sein
+          ./target/release/stoffwerk --pruefen tests/dateien/*.obj tests/dateien/*.fbx tests/dateien/*.dae tests/dateien/*.usda tests/dateien/*.glb | tee pruefung.txt
+          n=$(grep -c "^OK .*Höhe 1.750 m" pruefung.txt); echo "$n von 6 richtig"; [ "$n" -eq 6 ]
           cp target/release/stoffwerk stoffwerk-linux
           ls -lh stoffwerk-linux
       - uses: actions/upload-artifact@v4

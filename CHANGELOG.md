@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.2
+
+**Aufteilung wie bei Marvelous Designer**
+- 3D-Ansicht links, 2D-Schnitt in der Mitte, rechts Objektliste und Eigenschaften. Über jeder Ansicht eine eigene Leiste. In der 3D-Leiste gibt es feste Blickrichtungen (Vorne, Hinten, Links, Rechts, Oben).
+- In der Objektliste kann man den Avatar ein- und ausblenden. Die Eigenschaften zeigen Größe, Dreiecke, Texturen und Hinweise wie fehlende Texturen.
+
+**Avatare mit Texturen**
+- Avatare erscheinen mit ihren echten Texturen statt grau. Haare, Wimpern und Spitze werden an den durchsichtigen Stellen ausgestanzt.
+- Texturpfade in FBX und OBJ stammen oft vom Rechner der Person, die den Avatar gebaut hat. Stoffwerk sucht die Textur dann über den Dateinamen im Avatar-Ordner und darüber. Hat Unity eine .psd als .png abgelegt, wird die auch gefunden.
+- Bildformate: PNG, JPG, TGA, TIF, BMP, GIF, EXR, WebP, PSD.
+
+**Mehr Formate zum Laden**
+- Collada (.dae), USD (.usd/.usda/.usdc/.usdz) und Alembic (.abc), zusätzlich zu FBX, VRM, glTF und OBJ.
+- Collada und USD dürfen Z oben und Zentimeter verwenden, der Avatar steht trotzdem richtig.
+
+**Sonstiges**
+- Laden läuft im Hintergrund. Große Avatare mit vielen Texturen lassen das Fenster nicht mehr hängen.
+- Datei > Bildschirmfoto speichern: die 3D-Ansicht als PNG in doppelter Auflösung.
+- `stoffwerk --pruefen <datei>` lädt ohne Fenster und berichtet. Damit lassen sich Dateien prüfen, die nicht laden wollen. Der Release-Workflow lädt damit bei jedem Release eine Testfigur in jedem Format.
+
+**Nicht geprüft**
+- Alembic: keine Testdatei vorhanden. Gelesen werden nur die Netze ohne Transformationen und UVs, mehr kann die Bibliothek nicht.
+- USDZ mit Texturen im Archiv: Die Texturen darin werden nicht gefunden, das Netz schon.
+- Mit echten VRChat-Avataren noch nicht getestet, nur mit selbst gebauten Testfiguren.
+
 ## 0.1.1
 
 **FBX-Avatare laden**
