@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.1.3
+
+Abschnitt 2: Der Schnitt-Editor. Im 2D-Fenster kann man jetzt Schnittteile zeichnen, bearbeiten und Nähte festlegen.
+
+**Werkzeuge** (Leiste über dem 2D-Fenster, Kürzel in Klammern)
+- Auswählen und Verschieben (A), Punkte und Kanten bearbeiten (Z), Punkt auf einer Kante einfügen (X).
+- Polygon (H): Mit Umschalt gesetzte Punkte werden Kurvenpunkte. Ein Klick auf den ersten Punkt oder Enter schließt das Teil. Rechteck (S) und Kreis/Ellipse (E) zieht man auf.
+- Innenlinie (I) in ein Teil zeichnen.
+- Naht (N): erst eine Kante anklicken, dann die Gegenkante, jeweils nahe dem Ende, das zusammengehört. Beide Kanten erscheinen in derselben Farbe, feine Striche zeigen, welche Stellen aufeinandertreffen. Weichen die Längen um mehr als 0,5 cm ab, steht das in den Eigenschaften, weil der Stoff dort später gerafft wird.
+
+**Rechtsklick-Menü wie im Original**
+- Auf einem Punkt: Punkt löschen, Abnäher einfügen, in Kurvenpunkt bzw. Eckpunkt umwandeln.
+- Auf einem Teil: Duplizieren, symmetrisch kopieren (verknüpft), Verknüpfung lösen, spiegeln, 90° drehen, löschen.
+- Abnäher-Fenster mit Gesamtbreite und Länge. Der Punkt wird zur Mitte des Abnähers, die Spitze zeigt ins Teil.
+
+**Symmetrische Teile**
+- Eine verknüpfte Kopie übernimmt jede Änderung gespiegelt: Punkte ziehen, Abnäher, Innenlinien, Punkte einfügen und löschen. So entstehen linke und rechte Hälften, die immer gleich bleiben.
+
+**Ansicht**
+- Die Silhouette des Avatars liegt in echter Größe im Hintergrund. Die Füße stehen auf der Nulllinie, 1 cm im Schnitt ist 1 cm am Körper.
+- „Teilen“ zeigt zwei Ansichten übereinander (Übersicht und Ausschnitt), jede mit eigenem Zoom.
+- Kantenlängen beim Darüberfahren, Länge der aktuellen Linie beim Zeichnen, Maße beim Aufziehen.
+- Raster: Punkte rasten auf 0,5 cm ein, Strg hält das kurz aus.
+- Eigenschaften rechts: Name, Breite, Höhe, Umfang und Fläche jedes Teils, die Längen aller Kanten, Punkte mit exakten Koordinaten.
+
+**Rückgängig und Projekte**
+- Rückgängig und Wiederholen (Strg+Z / Strg+Y) für jede Änderung, bis zu 200 Schritte.
+- Projekt öffnen und speichern (.stoffwerk, Strg+O / Strg+S). Darin stehen der Schnitt und der Pfad zum Avatar, der beim Öffnen mitgeladen wird. Liegt der Avatar neben dem Projekt, wird der Pfad relativ gespeichert, damit man den Ordner verschieben kann.
+- Beim Beenden, bei „Neues Projekt“ und beim Öffnen fragt Stoffwerk nach, wenn Ungespeichertes verloren ginge. Im Fenstertitel steht dann ein Stern.
+- Das Format ist lesbares JSON.
+
+**Nicht geprüft**
+- Tastenkürzel: Im Test kamen keine Tasten an, weil das Testfenster keinen Fokus hatte. Die Werkzeugknöpfe sind geprüft, die Kürzel nicht.
+- Kurvenpunkte und Innenlinien sind nur mit Unit-Tests geprüft, nicht in der Bedienung.
+- Die Schnittteile erscheinen noch nicht in 3D. Das kommt mit der Simulation (Abschnitt 3).
+
 ## 0.1.2
 
 **Aufteilung wie bei Marvelous Designer**

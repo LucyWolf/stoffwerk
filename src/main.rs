@@ -4,7 +4,7 @@
 mod app;
 mod import;
 mod camera;
-mod pattern;
+mod schnitt;
 mod viewport;
 
 use eframe::egui;

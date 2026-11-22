@@ -1,6 +1,6 @@
 use crate::camera::OrbitCamera;
 use crate::import::{self, AvatarMesh};
-use crate::pattern::PatternView;
+use crate::schnitt::{self, Doc, Editor, editor::Sel};
 use crate::viewport::Viewport3D;
 use eframe::egui::{self, Color32, RichText, Sense};
 use eframe::egui_wgpu;
@@ -9,28 +9,36 @@ use std::sync::mpsc::{Receiver, channel};
 
 struct Loading {
     name: String,
+    path: PathBuf,
     rx: Receiver<anyhow::Result<AvatarMesh>>,
 }
 
-/// Was in der Objektliste ausgewählt ist; die Eigenschaften rechts zeigen dazu die Werte
-#[derive(Clone, Copy, PartialEq)]
-enum Selection {
-    None,
-    Avatar,
+/// Was nach der Rückfrage „ungespeicherte Änderungen“ passieren soll
+#[derive(Clone)]
+enum Pending {
+    Close,
+    New,
+    Open(PathBuf),
 }
 
 pub struct StoffwerkApp {
     rs: egui_wgpu::RenderState,
     viewport: Viewport3D,
     camera: OrbitCamera,
-    pattern: PatternView,
+    doc: Doc,
+    editor: Editor,
+    project_path: Option<PathBuf>,
     avatar: Option<AvatarMesh>,
+    avatar_path: Option<PathBuf>,
     avatar_visible: bool,
-    selection: Selection,
+    avatar_selected: bool,
     loading: Option<Loading>,
     error: Option<String>,
     info: Option<String>,
     show_about: bool,
+    pending: Option<Pending>,
+    allow_close: bool,
+    title: String,
     /// Größe der 3D-Ansicht in Bildpunkten, für das Bildschirmfoto
     view_px: [u32; 2],
     screenshot_requested: bool,
@@ -51,23 +59,38 @@ impl StoffwerkApp {
             rs,
             viewport,
             camera: OrbitCamera::default(),
-            pattern: PatternView::default(),
+            doc: Doc::default(),
+            editor: Editor::default(),
+            project_path: None,
             avatar: None,
+            avatar_path: None,
             avatar_visible: true,
-            selection: Selection::None,
+            avatar_selected: false,
             loading: None,
             error: None,
             info: None,
             show_about: false,
+            pending: None,
+            allow_close: false,
+            title: String::new(),
             view_px: [1280, 720],
             screenshot_requested: false,
         };
 
-        // Avatar direkt beim Start öffnen: stoffwerk <datei>
+        // Datei direkt beim Start öffnen: stoffwerk <avatar oder projekt>
         if let Some(arg) = std::env::args_os().nth(1) {
-            app.start_loading(&cc.egui_ctx, Path::new(&arg));
+            app.open_any(&cc.egui_ctx, Path::new(&arg));
         }
         Ok(app)
+    }
+
+    fn open_any(&mut self, ctx: &egui::Context, path: &Path) {
+        let is_project = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(schnitt::EXT));
+        if is_project {
+            self.request(ctx, Pending::Open(path.to_path_buf()));
+        } else {
+            self.start_loading(ctx, path);
+        }
     }
 
     /// Lädt im Hintergrund: große Avatare mit vielen Texturen brauchen Sekunden, das Fenster soll dabei nicht hängen.
@@ -82,35 +105,41 @@ impl StoffwerkApp {
             ctx.request_repaint();
         });
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.loading = Some(Loading { name, rx });
+        self.loading = Some(Loading { name, path: path.to_path_buf(), rx });
         self.error = None;
     }
 
-    fn poll_loading(&mut self) {
+    fn poll_loading(&mut self, ctx: &egui::Context) {
         let Some(l) = &self.loading else { return };
         let Ok(result) = l.rx.try_recv() else { return };
+        let path = l.path.clone();
         self.loading = None;
         match result {
             Ok(mesh) => {
                 self.camera.frame_bounds(mesh.min, mesh.max);
                 self.viewport.set_avatar(&self.rs, Some(&mesh));
+                self.editor.set_avatar(ctx, Some(&mesh));
                 self.avatar = Some(mesh);
+                if self.avatar_path.as_ref() != Some(&path) {
+                    self.editor.dirty = true;
+                }
+                self.avatar_path = Some(path);
                 self.avatar_visible = true;
-                self.selection = Selection::Avatar;
             }
             Err(e) => self.error = Some(format!("{e:#}")),
         }
     }
 
-    fn remove_avatar(&mut self) {
+    fn remove_avatar(&mut self, ctx: &egui::Context) {
         self.avatar = None;
+        self.avatar_path = None;
+        self.avatar_selected = false;
         self.viewport.set_avatar(&self.rs, None);
-        if self.selection == Selection::Avatar {
-            self.selection = Selection::None;
-        }
+        self.editor.set_avatar(ctx, None);
+        self.editor.dirty = true;
     }
 
-    fn open_dialog(&mut self, ctx: &egui::Context) {
+    fn open_avatar_dialog(&mut self, ctx: &egui::Context) {
         let picked = rfd::FileDialog::new()
             .set_title("Avatar laden")
             .add_filter("Avatar (FBX, VRM, glTF, OBJ, DAE, USD, Alembic)", import::EXTENSIONS)
@@ -118,6 +147,96 @@ impl StoffwerkApp {
             .pick_file();
         if let Some(path) = picked {
             self.start_loading(ctx, &path);
+        }
+    }
+
+    // ------------------------------------------------------------ Projekt
+
+    /// Fragt nach, wenn Ungespeichertes verloren ginge
+    fn request(&mut self, ctx: &egui::Context, action: Pending) {
+        if self.editor.dirty {
+            self.pending = Some(action);
+        } else {
+            self.run(ctx, action);
+        }
+    }
+
+    fn run(&mut self, ctx: &egui::Context, action: Pending) {
+        match action {
+            Pending::Close => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Pending::New => {
+                self.doc = Doc::default();
+                self.editor.clear_history();
+                self.project_path = None;
+                self.remove_avatar(ctx);
+                self.editor.dirty = false;
+            }
+            Pending::Open(path) => match schnitt::load(&path) {
+                Ok((doc, avatar)) => {
+                    self.doc = doc;
+                    self.editor.clear_history();
+                    self.project_path = Some(path);
+                    match avatar {
+                        Some(a) if a.exists() => {
+                            self.avatar_path = Some(a.clone());
+                            self.start_loading(ctx, &a);
+                        }
+                        Some(a) => {
+                            self.remove_avatar(ctx);
+                            self.error = Some(format!("Der Avatar des Projekts wurde nicht gefunden:\n{}", a.display()));
+                        }
+                        None => self.remove_avatar(ctx),
+                    }
+                    self.editor.dirty = false;
+                }
+                Err(e) => self.error = Some(format!("{e:#}")),
+            },
+        }
+    }
+
+    fn open_project_dialog(&mut self, ctx: &egui::Context) {
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title("Projekt öffnen")
+            .add_filter("Stoffwerk-Projekt", &[schnitt::EXT])
+            .pick_file()
+        {
+            self.request(ctx, Pending::Open(p));
+        }
+    }
+
+    /// Gibt true zurück, wenn gespeichert wurde
+    fn save(&mut self, save_as: bool) -> bool {
+        let path = match (&self.project_path, save_as) {
+            (Some(p), false) => p.clone(),
+            _ => {
+                let Some(mut p) = rfd::FileDialog::new()
+                    .set_title("Projekt speichern")
+                    .add_filter("Stoffwerk-Projekt", &[schnitt::EXT])
+                    .set_file_name("Projekt.stoffwerk")
+                    .save_file()
+                else {
+                    return false;
+                };
+                if p.extension().is_none() {
+                    p.set_extension(schnitt::EXT);
+                }
+                p
+            }
+        };
+        match schnitt::save(&path, &self.doc, self.avatar_path.as_deref()) {
+            Ok(()) => {
+                self.info = Some(format!("Gespeichert: {}", path.display()));
+                self.project_path = Some(path);
+                self.editor.dirty = false;
+                true
+            }
+            Err(e) => {
+                self.error = Some(format!("{e:#}"));
+                false
+            }
         }
     }
 
@@ -146,14 +265,30 @@ impl StoffwerkApp {
         }
     }
 
+    // ------------------------------------------------------------ Oberfläche
+
     fn menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("Datei", |ui| {
+                if ui.button("Neues Projekt").clicked() {
+                    self.request(&ctx, Pending::New);
+                }
+                if ui.add(egui::Button::new("Projekt öffnen …").shortcut_text("Strg+O")).clicked() {
+                    self.open_project_dialog(&ctx);
+                }
+                if ui.add(egui::Button::new("Projekt speichern").shortcut_text("Strg+S")).clicked() {
+                    self.save(false);
+                }
+                if ui.button("Projekt speichern unter …").clicked() {
+                    self.save(true);
+                }
+                ui.separator();
                 if ui.button("Avatar laden …").clicked() {
-                    self.open_dialog(ui.ctx());
+                    self.open_avatar_dialog(&ctx);
                 }
                 if ui.add_enabled(self.avatar.is_some(), egui::Button::new("Avatar entfernen")).clicked() {
-                    self.remove_avatar();
+                    self.remove_avatar(&ctx);
                 }
                 ui.separator();
                 if ui.button("Bildschirmfoto speichern …").clicked() {
@@ -161,7 +296,22 @@ impl StoffwerkApp {
                 }
                 ui.separator();
                 if ui.button("Beenden").clicked() {
-                    ui.send_viewport_cmd(egui::ViewportCommand::Close);
+                    self.request(&ctx, Pending::Close);
+                }
+            });
+            ui.menu_button("Bearbeiten", |ui| {
+                if ui.add_enabled(self.editor.can_undo(), egui::Button::new("Rückgängig").shortcut_text("Strg+Z")).clicked() {
+                    self.editor.undo(&mut self.doc);
+                }
+                if ui.add_enabled(self.editor.can_redo(), egui::Button::new("Wiederholen").shortcut_text("Strg+Y")).clicked() {
+                    self.editor.redo(&mut self.doc);
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(self.editor.sel != Sel::None, egui::Button::new("Auswahl löschen").shortcut_text("Entf"))
+                    .clicked()
+                {
+                    self.editor.delete_selection(&mut self.doc);
                 }
             });
             ui.menu_button("Ansicht", |ui| {
@@ -169,8 +319,9 @@ impl StoffwerkApp {
                     self.frame_avatar();
                 }
                 if ui.button("Schnittansicht zurücksetzen").clicked() {
-                    self.pattern.reset();
+                    self.editor.reset_views();
                 }
+                ui.checkbox(&mut self.editor.split, "Schnittansicht teilen");
             });
             ui.menu_button("Hilfe", |ui| {
                 if ui.button("Über Stoffwerk").clicked() {
@@ -216,7 +367,7 @@ impl StoffwerkApp {
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(title).strong());
                     ui.separator();
                     tools(ui);
@@ -305,52 +456,52 @@ impl StoffwerkApp {
     }
 
     fn view_2d(&mut self, ui: &mut egui::Ui) {
-        let mut reset = false;
-        Self::header(ui, "2D-Schnitt", |ui| {
-            if ui.small_button("Ansicht zurücksetzen").clicked() {
-                reset = true;
-            }
-        });
-        if reset {
-            self.pattern.reset();
-        }
-        self.pattern.ui(ui);
+        let (editor, doc) = (&mut self.editor, &mut self.doc);
+        Self::header(ui, "2D-Schnitt", |ui| editor.toolbar(ui, doc));
+        self.editor.ui(ui, &mut self.doc);
     }
 
-    /// Rechte Leiste: oben die Objektliste, darunter die Eigenschaften des ausgewählten Objekts
+    /// Rechte Leiste: oben die Objektliste, darunter die Eigenschaften der Auswahl
     fn side_panel(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         Self::header(ui, "Objekte", |_| {});
-        egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Avatar").weak().small());
-            match &self.avatar {
-                Some(a) => {
-                    let name = a.name.clone();
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.avatar_visible, "").on_hover_text("Anzeigen / ausblenden");
-                        if ui.selectable_label(self.selection == Selection::Avatar, name).clicked() {
-                            self.selection = Selection::Avatar;
+        egui::ScrollArea::vertical().id_salt("objekte").max_height(ui.available_height() * 0.45).show(ui, |ui| {
+            egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Avatar").weak().small());
+                match &self.avatar {
+                    Some(a) => {
+                        let name = a.name.clone();
+                        ui.horizontal(|ui| {
+                            ui.checkbox(&mut self.avatar_visible, "").on_hover_text("Anzeigen / ausblenden");
+                            let sel = self.avatar_selected && self.editor.sel == Sel::None;
+                            if ui.selectable_label(sel, name).clicked() {
+                                self.avatar_selected = true;
+                                self.editor.sel = Sel::None;
+                            }
+                        });
+                    }
+                    None => {
+                        if ui.button("Avatar laden …").clicked() {
+                            self.open_avatar_dialog(&ctx);
                         }
-                    });
-                }
-                None => {
-                    if ui.button("Avatar laden …").clicked() {
-                        self.open_dialog(ui.ctx());
                     }
                 }
-            }
-            ui.add_space(8.0);
-            ui.label(RichText::new("Schnittteile").weak().small());
-            ui.label(RichText::new("noch keine").weak());
+                ui.add_space(8.0);
+                self.editor.objects_ui(ui, &self.doc);
+            });
         });
 
         ui.add_space(6.0);
         Self::header(ui, "Eigenschaften", |_| {});
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("eigenschaften").show(ui, |ui| {
             egui::Frame::NONE.inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                match (self.selection, &self.avatar) {
-                    (Selection::Avatar, Some(a)) => {
+                if self.editor.properties_ui(ui, &mut self.doc) {
+                    return;
+                }
+                match (&self.avatar, self.avatar_selected) {
+                    (Some(a), true) => {
                         egui::Grid::new("avatar-props").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                             ui.label("Datei");
                             ui.label(&a.name);
@@ -380,7 +531,7 @@ impl StoffwerkApp {
                         }
                         ui.add_space(8.0);
                         if ui.button("Avatar entfernen").clicked() {
-                            self.remove_avatar();
+                            self.remove_avatar(&ctx);
                         }
                     }
                     _ => {
@@ -390,15 +541,80 @@ impl StoffwerkApp {
             });
         });
     }
+
+    fn update_title(&mut self, ctx: &egui::Context) {
+        let name = self
+            .project_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unbenannt".into());
+        let title = format!("{}{} – Stoffwerk {}", name, if self.editor.dirty { " *" } else { "" }, crate::VERSION);
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+    }
+
+    fn unsaved_dialog(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending.clone() else { return };
+        let mut choice = None;
+        egui::Modal::new(egui::Id::unique("ungespeichert")).show(ctx, |ui| {
+            ui.heading("Ungespeicherte Änderungen");
+            ui.label("Der Schnitt wurde seit dem letzten Speichern geändert.");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Speichern").clicked() {
+                    choice = Some(0);
+                }
+                if ui.button("Nicht speichern").clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Abbrechen").clicked() {
+                    choice = Some(2);
+                }
+            });
+        });
+        match choice {
+            Some(0) => {
+                self.pending = None;
+                if self.save(false) {
+                    self.run(ctx, action);
+                }
+            }
+            Some(1) => {
+                self.pending = None;
+                self.editor.dirty = false;
+                self.run(ctx, action);
+            }
+            Some(_) => self.pending = None,
+            None => {}
+        }
+    }
 }
 
 impl eframe::App for StoffwerkApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_loading();
+        let ctx = ui.ctx().clone();
+        self.poll_loading(&ctx);
+
+        // Schließen abfangen, solange Ungespeichertes da ist
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.editor.dirty {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending = Some(Pending::Close);
+        }
 
         let dropped: Option<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().next().map(|f| f.path().to_path_buf()));
         if let Some(path) = dropped {
-            self.start_loading(ui.ctx(), &path);
+            self.open_any(&ctx, &path);
+        }
+
+        let (save, open) = ctx.input(|i| (i.modifiers.command && i.key_pressed(egui::Key::S), i.modifiers.command && i.key_pressed(egui::Key::O)));
+        if save {
+            self.save(i_shift(&ctx));
+        }
+        if open {
+            self.open_project_dialog(&ctx);
         }
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
@@ -408,17 +624,21 @@ impl eframe::App for StoffwerkApp {
         let width = ui.available_width();
         egui::Panel::right("seite")
             .resizable(true)
-            .default_size(260.0)
-            .size_range(200.0..=420.0)
+            .default_size(270.0)
+            .size_range(200.0..=440.0)
             .frame(egui::Frame::NONE.fill(PANEL_BG))
             .show(ui, |ui| self.side_panel(ui));
         egui::Panel::left("3d")
             .resizable(true)
-            .default_size((width - 260.0) * 0.45)
-            .size_range(250.0..=(width - 260.0 - 250.0).max(260.0))
+            .default_size((width - 270.0) * 0.4)
+            .size_range(250.0..=(width - 270.0 - 300.0).max(260.0))
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.view_3d(ui));
         egui::CentralPanel::no_frame().show(ui, |ui| self.view_2d(ui));
+
+        if self.editor.sel != Sel::None {
+            self.avatar_selected = false;
+        }
 
         // Erst nach dem Zeichnen: das Menü ist dann zu, der Dialog blockiert nicht mitten im Aufbau
         if std::mem::take(&mut self.screenshot_requested) {
@@ -432,7 +652,7 @@ impl eframe::App for StoffwerkApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .open(&mut open)
-                .show(ui.ctx(), |ui| {
+                .show(&ctx, |ui| {
                     ui.label(err);
                     if ui.button("OK").clicked() {
                         self.error = None;
@@ -449,15 +669,22 @@ impl eframe::App for StoffwerkApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .open(&mut self.show_about)
-                .show(ui.ctx(), |ui| {
+                .show(&ctx, |ui| {
                     ui.heading(format!("Stoffwerk {}", crate::VERSION));
                     ui.label("Kleidung für VRChat-Avatare: Schnittmuster zeichnen, nähen, simulieren, exportieren.");
                     ui.hyperlink("https://github.com/LucyWolf/stoffwerk");
                 });
         }
 
+        self.unsaved_dialog(&ctx);
+        self.update_title(&ctx);
+
         if self.loading.is_some() {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+}
+
+fn i_shift(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.modifiers.shift)
 }
