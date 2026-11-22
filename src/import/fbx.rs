@@ -8,10 +8,11 @@ use glam::{Vec2, Vec3};
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<AvatarMesh> {
+pub fn load(path: &Path, import: &super::ImportOptions) -> Result<AvatarMesh> {
+    // Bei Einstellung von Hand bleiben die Rohzahlen der Datei stehen; Stoffwerk rechnet danach selbst um
     let opts = ufbx::LoadOpts {
-        target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
-        target_unit_meters: 1.0,
+        target_axes: if import.auto_axes { ufbx::CoordinateAxes::right_handed_y_up() } else { Default::default() },
+        target_unit_meters: if import.auto_unit { 1.0 } else { 0.0 },
         space_conversion: ufbx::SpaceConversion::ModifyGeometry,
         generate_missing_normals: true,
         ..Default::default()

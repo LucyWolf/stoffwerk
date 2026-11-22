@@ -195,7 +195,24 @@ impl Viewport3D {
             anisotropy_clamp: 8,
             ..Default::default()
         });
-        let white = upload_texture(rs, &TextureImage { width: 1, height: 1, mips: vec![vec![255; 4]], has_alpha: false });
+        // Ersatz für Teile ohne Textur: weiß, mit Inhalt gleich beim Anlegen
+        let white = device
+            .create_texture_with_data(
+                &rs.queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("weiss"),
+                    size: wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &[255u8; 4 * 4 * 4],
+            )
+            .create_view(&Default::default());
 
         let grid_vertices = grid_vertices();
         let grid = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -238,10 +255,17 @@ impl Viewport3D {
             .parts
             .iter()
             .map(|p| {
-                let view = p.texture.and_then(|i| textures.get(i)).unwrap_or(&self.white);
+                let tex = p.texture.and_then(|i| textures.get(i));
+                let has_tex = tex.is_some();
+                let view = tex.unwrap_or(&self.white);
                 let flags = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("material"),
-                    contents: bytemuck::cast_slice(&[if p.cutout { 1.0f32 } else { 0.0 }, 0.0, 0.0, 0.0]),
+                    contents: bytemuck::cast_slice(&[
+                        if p.cutout { 1.0f32 } else { 0.0 },
+                        if has_tex { 1.0 } else { 0.0 },
+                        0.0,
+                        0.0,
+                    ]),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
                 let material = device.create_bind_group(&wgpu::BindGroupDescriptor {

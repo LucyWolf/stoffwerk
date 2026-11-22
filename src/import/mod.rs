@@ -11,6 +11,7 @@ mod usd;
 
 use anyhow::{Result, bail};
 use glam::{Vec2, Vec3};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 pub use texture::TextureImage;
 
@@ -88,20 +89,100 @@ impl AvatarMesh {
     }
 }
 
-pub fn load(path: &Path) -> Result<AvatarMesh> {
+/// Einheit, in der die Zahlen in der Datei gemeint sind
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Unit {
+    Millimeter,
+    Centimeter,
+    Meter,
+    Inch,
+    Foot,
+}
+
+impl Unit {
+    pub const ALL: [Unit; 5] = [Unit::Millimeter, Unit::Centimeter, Unit::Meter, Unit::Inch, Unit::Foot];
+
+    pub fn meters(self) -> f32 {
+        match self {
+            Unit::Millimeter => 0.001,
+            Unit::Centimeter => 0.01,
+            Unit::Meter => 1.0,
+            Unit::Inch => 0.0254,
+            Unit::Foot => 0.3048,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Unit::Millimeter => "Millimeter",
+            Unit::Centimeter => "Zentimeter (DAZ, 3ds Max)",
+            Unit::Meter => "Meter (Blender, Unity, VRM)",
+            Unit::Inch => "Zoll",
+            Unit::Foot => "Fuß",
+        }
+    }
+}
+
+/// Einstellungen aus dem Import-Fenster
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ImportOptions {
+    /// Einheit aus der Datei übernehmen bzw. erkennen
+    pub auto_unit: bool,
+    pub unit: Unit,
+    /// Zusätzliche Skalierung in Prozent
+    pub percent: f32,
+    /// Achsen aus der Datei übernehmen
+    pub auto_axes: bool,
+    /// Für Ziel-X, -Y (oben), -Z: welche Achse der Datei (0 = X, 1 = Y, 2 = Z) und ob umgekehrt
+    pub axes: [(usize, bool); 3],
+    /// Füße auf die Bodenebene
+    pub ground: bool,
+}
+
+impl Default for ImportOptions {
+    fn default() -> Self {
+        Self {
+            auto_unit: true,
+            unit: Unit::Meter,
+            percent: 100.0,
+            auto_axes: true,
+            axes: [(0, false), (1, false), (2, false)],
+            ground: true,
+        }
+    }
+}
+
+impl ImportOptions {
+    /// Jede Achse der Datei genau einmal verwendet?
+    pub fn axes_valid(&self) -> bool {
+        let mut seen = [false; 3];
+        for (src, _) in self.axes {
+            if src > 2 || seen[src] {
+                return false;
+            }
+            seen[src] = true;
+        }
+        true
+    }
+}
+
+pub fn load(path: &Path, opts: &ImportOptions) -> Result<AvatarMesh> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
+    if !opts.auto_axes && !opts.axes_valid() {
+        bail!("Achsen: Jede Achse der Datei darf nur einmal zugeordnet werden.");
+    }
 
     let mut mesh = match ext.as_str() {
         "gltf" | "glb" | "vrm" => gltf::load(path)?,
-        "fbx" => fbx::load(path)?,
+        "fbx" => fbx::load(path, opts)?,
         "obj" => obj::load(path)?,
-        "dae" => dae::load(path)?,
-        "usd" | "usda" | "usdc" | "usdz" => usd::load(path)?,
-        "abc" => abc::load(path)?,
+        "dae" => dae::load(path, opts)?,
+        "usd" | "usda" | "usdc" | "usdz" => usd::load(path, opts)?,
+        "abc" => abc::load(path, opts)?,
         _ => bail!(
             "Unbekanntes Dateiformat „.{ext}“. Stoffwerk liest {}.",
             EXTENSIONS.iter().map(|e| format!(".{e}")).collect::<Vec<_>>().join(", ")
@@ -114,12 +195,12 @@ pub fn load(path: &Path) -> Result<AvatarMesh> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    finish(&mut mesh);
+    finish(&mut mesh, opts);
     Ok(mesh)
 }
 
-/// Fehlende Normalen berechnen, Maße bestimmen, Zentimeter auf Meter bringen, Füße auf den Boden.
-fn finish(mesh: &mut AvatarMesh) {
+/// Fehlende Normalen berechnen, Achsen und Einheit anwenden, Füße auf den Boden.
+fn finish(mesh: &mut AvatarMesh, opts: &ImportOptions) {
     if mesh.parts.is_empty() {
         mesh.parts.push(Part { first: 0, count: mesh.indices.len() as u32, texture: None, cutout: false });
     }
@@ -141,27 +222,112 @@ fn finish(mesh: &mut AvatarMesh) {
         }
     }
 
-    let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for p in &mesh.positions {
-        min = min.min(*p);
-        max = max.max(*p);
+    // Achsen von Hand: Ziel-Achse k bekommt Achse axes[k] der Datei
+    if !opts.auto_axes {
+        let map = |v: Vec3| {
+            let a = v.to_array();
+            Vec3::from_array(std::array::from_fn(|k| {
+                let (src, inv) = opts.axes[k];
+                if inv { -a[src] } else { a[src] }
+            }))
+        };
+        mesh.positions.iter_mut().for_each(|p| *p = map(*p));
+        mesh.normals.iter_mut().for_each(|n| *n = map(*n));
+        // Eine Spiegelung dreht den Umlaufsinn der Dreiecke um
+        let m = glam::Mat3::from_cols(map(Vec3::X), map(Vec3::Y), map(Vec3::Z));
+        if m.determinant() < 0.0 {
+            mesh.indices.chunks_exact_mut(3).for_each(|t| t.swap(1, 2));
+        }
     }
 
-    // Ein Mensch ist 0,5 bis 3 m groß. Alles über 20 „Meter“ ist fast sicher in Zentimetern gespeichert.
-    if max.y - min.y > 20.0 {
-        let s = 0.01;
-        mesh.positions.iter_mut().for_each(|p| *p *= s);
-        min *= s;
-        max *= s;
+    let bounds = |m: &AvatarMesh| {
+        let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in &m.positions {
+            min = min.min(*p);
+            max = max.max(*p);
+        }
+        (min, max)
+    };
+    let (min, max) = bounds(mesh);
+
+    let mut scale = opts.percent.max(0.01) / 100.0;
+    if opts.auto_unit {
+        // Ein Mensch ist 0,5 bis 3 m groß. Alles über 20 „Meter“ ist fast sicher in Zentimetern gespeichert.
+        if max.y - min.y > 20.0 {
+            scale *= 0.01;
+        }
+    } else {
+        scale *= opts.unit.meters();
+    }
+    if (scale - 1.0).abs() > 1e-6 {
+        mesh.positions.iter_mut().for_each(|p| *p *= scale);
     }
 
-    let lift = -min.y;
-    if lift.abs() > 1e-4 {
-        mesh.positions.iter_mut().for_each(|p| p.y += lift);
-        min.y += lift;
-        max.y += lift;
+    let (mut min, mut max) = bounds(mesh);
+    if opts.ground {
+        let lift = -min.y;
+        if lift.abs() > 1e-4 {
+            mesh.positions.iter_mut().for_each(|p| p.y += lift);
+            min.y += lift;
+            max.y += lift;
+        }
     }
 
     mesh.min = min;
     mesh.max = max;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn datei(n: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dateien").join(n)
+    }
+
+    #[test]
+    fn automatisch_steht_die_figur() {
+        for f in ["figur_zup_cm.fbx", "figur.dae", "figur.usda", "figur_cm.obj", "figur.glb"] {
+            let m = load(&datei(f), &ImportOptions::default()).unwrap();
+            assert!((m.height() - 1.75).abs() < 1e-3, "{f}: {}", m.height());
+        }
+    }
+
+    #[test]
+    fn von_hand_zentimeter_und_z_oben() {
+        // Rohzahlen der FBX: Zentimeter, Z oben. Ziel-Y = Datei-Z, Ziel-Z = −Datei-Y
+        let o = ImportOptions {
+            auto_unit: false,
+            unit: Unit::Centimeter,
+            auto_axes: false,
+            axes: [(0, false), (2, false), (1, true)],
+            ..Default::default()
+        };
+        let m = load(&datei("figur_zup_cm.fbx"), &o).unwrap();
+        assert!((m.height() - 1.75).abs() < 1e-3, "{}", m.height());
+        assert!((m.max.x - m.min.x - 0.76).abs() < 1e-3);
+    }
+
+    #[test]
+    fn falsche_einheit_wirkt_wirklich() {
+        // Meter statt Zentimeter von Hand: dann ist die Figur 175 m groß – die Einstellung greift
+        let o = ImportOptions { auto_unit: false, unit: Unit::Meter, ..Default::default() };
+        let m = load(&datei("figur_cm.obj"), &o).unwrap();
+        assert!((m.height() - 175.0).abs() < 1e-2, "{}", m.height());
+    }
+
+    #[test]
+    fn prozent_und_ohne_boden() {
+        let o = ImportOptions { percent: 50.0, ground: false, ..Default::default() };
+        let m = load(&datei("figur.glb"), &o).unwrap();
+        assert!((m.height() - 0.875).abs() < 1e-3);
+        assert!(m.min.y.abs() < 1e-4); // Figur steht in der Datei schon auf 0
+    }
+
+    #[test]
+    fn doppelte_achse_wird_abgelehnt() {
+        let o = ImportOptions { auto_axes: false, axes: [(0, false), (0, false), (2, false)], ..Default::default() };
+        assert!(load(&datei("figur.glb"), &o).is_err());
+    }
+}
+

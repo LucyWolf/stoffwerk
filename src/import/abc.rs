@@ -9,14 +9,15 @@ use glam::{Vec2, Vec3};
 use ogawa_rs::{Archive, ArchiveReader, FileReader, ObjectReader, Schema};
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<AvatarMesh> {
+pub fn load(path: &Path, opts: &super::ImportOptions) -> Result<AvatarMesh> {
+    let auto_unit = opts.auto_unit;
     // ogawa-rs bricht bei manchen Dateien mit einem Programmfehler statt eines Fehlers ab – abfangen
     let path = path.to_path_buf();
-    std::panic::catch_unwind(move || load_inner(&path))
+    std::panic::catch_unwind(move || load_inner(&path, auto_unit))
         .map_err(|_| anyhow!("Diese Alembic-Datei kann Stoffwerk nicht lesen (Aufbau wird nicht unterstützt)."))?
 }
 
-fn load_inner(path: &Path) -> Result<AvatarMesh> {
+fn load_inner(path: &Path, auto_unit: bool) -> Result<AvatarMesh> {
     let file = std::fs::File::open(path)?;
     let mut reader = FileReader::new(file).map_err(|e| anyhow!("Alembic: {e:?}"))?;
     let archive = Archive::new(&mut reader).map_err(|e| anyhow!("Keine gültige Alembic-Datei (nur das Ogawa-Format wird unterstützt): {e:?}"))?;
@@ -34,7 +35,7 @@ fn load_inner(path: &Path) -> Result<AvatarMesh> {
         lo = lo.min(p.y);
         hi = hi.max(p.y);
     }
-    if hi - lo > 200.0 {
+    if auto_unit && hi - lo > 200.0 {
         out.positions.iter_mut().for_each(|p| *p *= 0.1);
     }
     Ok(out)

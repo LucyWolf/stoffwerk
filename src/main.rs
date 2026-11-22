@@ -21,7 +21,7 @@ fn main() -> eframe::Result {
     if std::env::args().nth(1).as_deref() == Some("--pruefen") {
         let mut ok = true;
         for f in std::env::args().skip(2) {
-            match import::load(std::path::Path::new(&f)) {
+            match import::load(std::path::Path::new(&f), &import::ImportOptions::default()) {
                 Ok(m) => {
                     println!(
                         "OK  {f}: {} Dreiecke, {} Teile, {} Texturen, {} ausgestanzt, Höhe {:.3} m, x {:.3}..{:.3}, z {:.3}..{:.3}",

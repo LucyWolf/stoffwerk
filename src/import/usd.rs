@@ -9,7 +9,7 @@ use openusd::usd::{Prim, Stage};
 use openusd::{sdf, vt};
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<AvatarMesh> {
+pub fn load(path: &Path, opts: &super::ImportOptions) -> Result<AvatarMesh> {
     let file = path.to_string_lossy().into_owned();
     let stage = Stage::open(&file).map_err(|e| anyhow!("USD konnte nicht gelesen werden: {e}"))?;
 
@@ -25,8 +25,8 @@ pub fn load(path: &Path) -> Result<AvatarMesh> {
         Some(vt::Value::Float(f)) if f > 0.0 => f as f64,
         _ => 0.01, // USD-Vorgabe sind Zentimeter
     };
-    let mut fix = DMat4::from_scale(DVec3::splat(meters));
-    if up_z {
+    let mut fix = DMat4::from_scale(DVec3::splat(if opts.auto_unit { meters } else { 1.0 }));
+    if up_z && opts.auto_axes {
         fix = DMat4::from_rotation_x(-std::f64::consts::FRAC_PI_2) * fix;
     }
 

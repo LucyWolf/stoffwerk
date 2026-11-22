@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.5
+
+**Avatare ohne Textur waren schwarz** (seit 0.1.2)
+- Alles ohne Textur erschien in 3D als schwarze Fläche: Avatare ohne Texturen und Teile, deren Textur nicht gefunden wurde. Die weiße Ersatztextur kam beim Zeichnen als Schwarz an. Teile ohne Textur verwenden ihre Materialfarbe jetzt direkt, ohne Ersatztextur.
+- Aufgefallen ist das erst jetzt, weil die Bildschirmfoto-Tests seit 0.1.2 nur texturierte Figuren geprüft haben.
+
+**Import-Fenster**
+- Avatar laden, eine Datei ins Fenster ziehen oder „Neu importieren“ in den Eigenschaften öffnet ein Fenster mit den Einstellungen:
+  - Einheit aus der Datei übernehmen, oder von Hand: Millimeter, Zentimeter, Meter, Zoll, Fuß. Dazu eine zusätzliche Skalierung in Prozent.
+  - Achsen aus der Datei übernehmen, oder von Hand: welche Achse der Datei zu X, Y (oben) und Z wird, jeweils umkehrbar.
+  - Am Boden ausrichten.
+  - Zurücksetzen, OK, Abbrechen.
+- Gedacht für Dateien, bei denen die automatische Erkennung danebenliegt, etwa ein OBJ in Millimetern oder ein Export mit falsch gesetzter Hochachse.
+- Die Einstellungen werden im Projekt gespeichert und beim Öffnen wieder verwendet. Das nächste Import-Fenster schlägt die zuletzt gewählten vor.
+- Bei FBX, DAE und USD greift „von Hand“ auf die Rohzahlen der Datei, ohne die automatische Umrechnung.
+
+**Nicht enthalten**
+- Optionen für Kamera, Animation, Fitting Suit, Anordnungspunkte und Kleidung-Importieren gibt es nicht, weil Stoffwerk diese Dinge noch nicht kann. Schalter ohne Wirkung wären irreführend.
+
 ## 0.1.4
 
 **Symbolleiste im Schnittfenster**

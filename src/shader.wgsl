@@ -4,7 +4,7 @@ struct Globals {
 };
 
 struct Material {
-    // x: Ausstanzen (1 = Pixel unter 50 % Deckkraft weglassen)
+    // x: Ausstanzen (1 = Pixel unter 50 % Deckkraft weglassen), y: Textur vorhanden
     flags: vec4<f32>,
 };
 
@@ -42,7 +42,9 @@ fn vs_main(v: VsIn) -> VsOut {
 // Weiches Studiolicht: Hauptlicht schräg von vorn oben, Gegenlicht, Himmel/Boden-Umgebung.
 @fragment
 fn fs_lit(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let t = textureSample(tex, samp, i.uv);
+    // flags.y: Teil hat eine Textur; sonst gilt nur die Materialfarbe
+    let sampled = textureSample(tex, samp, i.uv);
+    let t = select(vec4<f32>(1.0, 1.0, 1.0, 1.0), sampled, mat.flags.y > 0.5);
     if (mat.flags.x > 0.5 && t.a < 0.5) {
         discard;
     }

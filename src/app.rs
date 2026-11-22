@@ -1,5 +1,5 @@
 use crate::camera::OrbitCamera;
-use crate::import::{self, AvatarMesh};
+use crate::import::{self, AvatarMesh, ImportOptions, Unit};
 use crate::schnitt::{self, Doc, Editor, editor::Sel};
 use crate::viewport::Viewport3D;
 use eframe::egui::{self, Color32, RichText, Sense};
@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, channel};
 struct Loading {
     name: String,
     path: PathBuf,
+    opts: ImportOptions,
     rx: Receiver<anyhow::Result<AvatarMesh>>,
 }
 
@@ -30,6 +31,12 @@ pub struct StoffwerkApp {
     project_path: Option<PathBuf>,
     avatar: Option<AvatarMesh>,
     avatar_path: Option<PathBuf>,
+    /// Einstellungen, mit denen der aktuelle Avatar geladen wurde (kommen ins Projekt)
+    avatar_opts: ImportOptions,
+    /// Zuletzt gewählte Einstellungen, Vorgabe für das nächste Import-Fenster
+    import_opts: ImportOptions,
+    /// Offenes Import-Fenster: Datei und Einstellungen
+    import_dialog: Option<(PathBuf, ImportOptions)>,
     avatar_visible: bool,
     avatar_selected: bool,
     loading: Option<Loading>,
@@ -64,6 +71,9 @@ impl StoffwerkApp {
             project_path: None,
             avatar: None,
             avatar_path: None,
+            avatar_opts: ImportOptions::default(),
+            import_opts: ImportOptions::default(),
+            import_dialog: None,
             avatar_visible: true,
             avatar_selected: false,
             loading: None,
@@ -89,23 +99,23 @@ impl StoffwerkApp {
         if is_project {
             self.request(ctx, Pending::Open(path.to_path_buf()));
         } else {
-            self.start_loading(ctx, path);
+            self.import_dialog = Some((path.to_path_buf(), self.import_opts));
         }
     }
 
     /// Lädt im Hintergrund: große Avatare mit vielen Texturen brauchen Sekunden, das Fenster soll dabei nicht hängen.
-    fn start_loading(&mut self, ctx: &egui::Context, path: &Path) {
+    fn start_loading(&mut self, ctx: &egui::Context, path: &Path, opts: ImportOptions) {
         let (tx, rx) = channel();
         let p = path.to_path_buf();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let r = std::panic::catch_unwind(|| import::load(&p))
+            let r = std::panic::catch_unwind(|| import::load(&p, &opts))
                 .unwrap_or_else(|_| Err(anyhow::anyhow!("Beim Lesen der Datei ist ein interner Fehler aufgetreten.")));
             let _ = tx.send(r);
             ctx.request_repaint();
         });
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.loading = Some(Loading { name, path: path.to_path_buf(), rx });
+        self.loading = Some(Loading { name, path: path.to_path_buf(), opts, rx });
         self.error = None;
     }
 
@@ -113,6 +123,7 @@ impl StoffwerkApp {
         let Some(l) = &self.loading else { return };
         let Ok(result) = l.rx.try_recv() else { return };
         let path = l.path.clone();
+        let opts = l.opts;
         self.loading = None;
         match result {
             Ok(mesh) => {
@@ -120,9 +131,10 @@ impl StoffwerkApp {
                 self.viewport.set_avatar(&self.rs, Some(&mesh));
                 self.editor.set_avatar(ctx, Some(&mesh));
                 self.avatar = Some(mesh);
-                if self.avatar_path.as_ref() != Some(&path) {
+                if self.avatar_path.as_ref() != Some(&path) || self.avatar_opts != opts {
                     self.editor.dirty = true;
                 }
+                self.avatar_opts = opts;
                 self.avatar_path = Some(path);
                 self.avatar_visible = true;
             }
@@ -146,7 +158,7 @@ impl StoffwerkApp {
             .add_filter("Alle Dateien", &["*"])
             .pick_file();
         if let Some(path) = picked {
-            self.start_loading(ctx, &path);
+            self.open_any(ctx, &path);
         }
     }
 
@@ -175,14 +187,15 @@ impl StoffwerkApp {
                 self.editor.dirty = false;
             }
             Pending::Open(path) => match schnitt::load(&path) {
-                Ok((doc, avatar)) => {
+                Ok((doc, avatar, opts)) => {
                     self.doc = doc;
                     self.editor.clear_history();
                     self.project_path = Some(path);
                     match avatar {
                         Some(a) if a.exists() => {
                             self.avatar_path = Some(a.clone());
-                            self.start_loading(ctx, &a);
+                            self.avatar_opts = opts;
+                            self.start_loading(ctx, &a, opts);
                         }
                         Some(a) => {
                             self.remove_avatar(ctx);
@@ -226,7 +239,7 @@ impl StoffwerkApp {
                 p
             }
         };
-        match schnitt::save(&path, &self.doc, self.avatar_path.as_deref()) {
+        match schnitt::save(&path, &self.doc, self.avatar_path.as_deref(), &self.avatar_opts) {
             Ok(()) => {
                 self.info = Some(format!("Gespeichert: {}", path.display()));
                 self.project_path = Some(path);
@@ -530,9 +543,16 @@ impl StoffwerkApp {
                             }
                         }
                         ui.add_space(8.0);
-                        if ui.button("Avatar entfernen").clicked() {
-                            self.remove_avatar(&ctx);
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("Neu importieren …").on_hover_text("Einheit, Achsen und Boden ändern").clicked() {
+                                if let Some(p) = self.avatar_path.clone() {
+                                    self.import_dialog = Some((p, self.avatar_opts));
+                                }
+                            }
+                            if ui.button("Avatar entfernen").clicked() {
+                                self.remove_avatar(&ctx);
+                            }
+                        });
                     }
                     _ => {
                         ui.label(RichText::new("Nichts ausgewählt").weak());
@@ -553,6 +573,101 @@ impl StoffwerkApp {
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
+        }
+    }
+
+    /// Import-Fenster: Einheit, Achsen, Boden – wie beim Import in Marvelous Designer
+    fn import_window(&mut self, ctx: &egui::Context) {
+        let Some((path, mut o)) = self.import_dialog.clone() else { return };
+        let mut result: Option<bool> = None;
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        egui::Modal::new(egui::Id::unique("import")).show(ctx, |ui| {
+            ui.set_width(360.0);
+            ui.heading("Avatar importieren");
+            ui.label(RichText::new(&name).weak());
+            ui.add_space(6.0);
+
+            let section = |ui: &mut egui::Ui, title: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+                egui::Frame::group(ui.style()).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new(title).strong());
+                    add(ui);
+                });
+            };
+
+            section(ui, "Skalierung", &mut |ui| {
+                ui.checkbox(&mut o.auto_unit, "Einheit aus der Datei übernehmen")
+                    .on_hover_text("FBX, DAE und USD speichern ihre Einheit; bei OBJ und glTF wird sie an der Größe erkannt");
+                ui.add_enabled_ui(!o.auto_unit, |ui| {
+                    egui::ComboBox::from_id_salt("einheit").selected_text(o.unit.label()).width(240.0).show_ui(ui, |ui| {
+                        for u in Unit::ALL {
+                            ui.selectable_value(&mut o.unit, u, u.label());
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Zusätzlich");
+                    ui.add(egui::DragValue::new(&mut o.percent).range(1.0..=10000.0).speed(0.5).suffix(" %"));
+                });
+            });
+            ui.add_space(4.0);
+            section(ui, "Achsen", &mut |ui| {
+                ui.checkbox(&mut o.auto_axes, "Achsen aus der Datei übernehmen")
+                    .on_hover_text("FBX, DAE und USD sagen, welche Achse oben ist; sonst gilt Y oben");
+                ui.add_enabled_ui(!o.auto_axes, |ui| {
+                    ui.horizontal(|ui| {
+                        for (k, target) in ["X", "Y (oben)", "Z"].iter().enumerate() {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(*target).small());
+                                let (src, inv) = &mut o.axes[k];
+                                egui::ComboBox::from_id_salt(("achse", k))
+                                    .selected_text(["X", "Y", "Z"][*src])
+                                    .width(60.0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, n) in ["X", "Y", "Z"].iter().enumerate() {
+                                            ui.selectable_value(src, i, *n);
+                                        }
+                                    });
+                                ui.checkbox(inv, "Umkehren");
+                            });
+                        }
+                    });
+                    if !o.axes_valid() {
+                        ui.label(RichText::new("Jede Achse der Datei nur einmal zuordnen").color(Color32::from_rgb(230, 170, 80)).small());
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            section(ui, "Position", &mut |ui| {
+                ui.checkbox(&mut o.ground, "Am Boden ausrichten").on_hover_text("Die Füße stehen auf der Bodenebene");
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Zurücksetzen").clicked() {
+                    o = ImportOptions::default();
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Abbrechen").clicked() {
+                        result = Some(false);
+                    }
+                    let ok = o.auto_axes || o.axes_valid();
+                    if ui.add_enabled(ok, egui::Button::new("OK")).clicked() {
+                        result = Some(true);
+                    }
+                });
+            });
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            result = Some(false);
+        }
+        match result {
+            Some(true) => {
+                self.import_dialog = None;
+                self.import_opts = o;
+                self.start_loading(ctx, &path, o);
+            }
+            Some(false) => self.import_dialog = None,
+            None => self.import_dialog = Some((path, o)),
         }
     }
 
@@ -676,6 +791,7 @@ impl eframe::App for StoffwerkApp {
                 });
         }
 
+        self.import_window(&ctx);
         self.unsaved_dialog(&ctx);
         self.update_title(&ctx);
 

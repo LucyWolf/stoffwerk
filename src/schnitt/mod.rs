@@ -6,6 +6,7 @@ pub mod model;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use crate::import::ImportOptions;
 use std::path::{Path, PathBuf};
 
 pub use editor::Editor;
@@ -19,15 +20,18 @@ pub struct Project {
     /// Pfad zum Avatar; relativ zur Projektdatei, wenn er im selben Ordner oder darunter liegt
     #[serde(default)]
     pub avatar: Option<String>,
+    /// Einstellungen aus dem Import-Fenster, damit der Avatar beim Öffnen gleich aussieht
+    #[serde(default)]
+    pub avatar_import: ImportOptions,
     pub schnitt: Doc,
 }
 
 pub const EXT: &str = "stoffwerk";
 
-pub fn save(path: &Path, doc: &Doc, avatar: Option<&Path>) -> Result<()> {
+pub fn save(path: &Path, doc: &Doc, avatar: Option<&Path>, avatar_import: &ImportOptions) -> Result<()> {
     let base = path.parent().unwrap_or(Path::new(""));
     let avatar = avatar.map(|a| a.strip_prefix(base).unwrap_or(a).to_string_lossy().into_owned());
-    let p = Project { format: "stoffwerk".into(), version: 1, avatar, schnitt: doc.clone() };
+    let p = Project { format: "stoffwerk".into(), version: 1, avatar, avatar_import: *avatar_import, schnitt: doc.clone() };
     let json = serde_json::to_string_pretty(&p)?;
     // Erst daneben schreiben, dann umbenennen: ein Absturz beim Speichern zerstört so nie die alte Datei
     let tmp = path.with_extension("stoffwerk.tmp");
@@ -36,7 +40,7 @@ pub fn save(path: &Path, doc: &Doc, avatar: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> Result<(Doc, Option<PathBuf>)> {
+pub fn load(path: &Path) -> Result<(Doc, Option<PathBuf>, ImportOptions)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("Konnte nicht lesen: {}", path.display()))?;
     let p: Project = serde_json::from_str(&text).context("Keine gültige Stoffwerk-Projektdatei")?;
     if p.format != "stoffwerk" {
@@ -50,7 +54,7 @@ pub fn load(path: &Path) -> Result<(Doc, Option<PathBuf>)> {
         let ap = PathBuf::from(&a);
         if ap.is_absolute() { ap } else { base.join(ap) }
     });
-    Ok((p.schnitt, avatar))
+    Ok((p.schnitt, avatar, p.avatar_import))
 }
 
 #[cfg(test)]
@@ -67,8 +71,12 @@ mod tests {
         doc.symmetric_copy(id);
         let file = dir.join("t.stoffwerk");
         let avatar = dir.join("avatare/figur.vrm");
-        save(&file, &doc, Some(&avatar)).unwrap();
-        let (back, av) = load(&file).unwrap();
+        let mut io = ImportOptions::default();
+        io.auto_unit = false;
+        io.unit = crate::import::Unit::Centimeter;
+        save(&file, &doc, Some(&avatar), &io).unwrap();
+        let (back, av, io2) = load(&file).unwrap();
+        assert_eq!(io2, io);
         assert_eq!(back.pieces.len(), 2);
         assert_eq!(back.pieces[0].pts, doc.pieces[0].pts);
         assert_eq!(av.unwrap(), avatar);

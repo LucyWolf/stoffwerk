@@ -10,7 +10,7 @@ use roxmltree::{Document, Node};
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn load(path: &Path) -> Result<AvatarMesh> {
+pub fn load(path: &Path, opts: &super::ImportOptions) -> Result<AvatarMesh> {
     let text = std::fs::read_to_string(path).with_context(|| format!("Datei konnte nicht gelesen werden: {}", path.display()))?;
     let doc = Document::parse_with_options(&text, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() })
         .map_err(|e| anyhow!("Keine gültige Collada-Datei: {e}"))?;
@@ -31,8 +31,8 @@ pub fn load(path: &Path) -> Result<AvatarMesh> {
         .and_then(|m| m.parse::<f32>().ok())
         .unwrap_or(1.0);
     let up = asset.and_then(|a| child(a, "up_axis")).and_then(|u| u.text()).unwrap_or("Y_UP").trim().to_string();
-    let mut fix = Mat4::from_scale(Vec3::splat(meter));
-    match up.as_str() {
+    let mut fix = Mat4::from_scale(Vec3::splat(if opts.auto_unit { meter } else { 1.0 }));
+    match if opts.auto_axes { up.as_str() } else { "Y_UP" } {
         "Z_UP" => fix = Mat4::from_rotation_x(-std::f32::consts::FRAC_PI_2) * fix,
         "X_UP" => fix = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2) * fix,
         _ => {}
