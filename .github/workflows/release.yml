@@ -93,7 +93,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Stoffwerk ${{ github.ref_name }}
           body_path: notizen.md
-          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
           files: |
             anhaenge/linux/*
             anhaenge/windows/*
