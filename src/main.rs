@@ -6,6 +6,7 @@ mod import;
 mod camera;
 mod schnitt;
 mod sim;
+mod update;
 mod viewport;
 
 use eframe::egui;
@@ -13,9 +14,31 @@ use eframe::egui;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> eframe::Result {
+    update::remember_exe();
     // Für den Release-Workflow: prüft, dass das fertige Programm überhaupt startet
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("Stoffwerk {VERSION}");
+        return Ok(());
+    }
+    // Update ohne Fenster: prüfen, einspielen, berichten (zum Testen und falls das Fenster nicht startet)
+    if std::env::args().nth(1).as_deref() == Some("--update") {
+        let s = update::check();
+        println!("Installiert {}, auf GitHub {}", s.installed, s.available.as_deref().unwrap_or("?"));
+        if let Some(e) = s.error {
+            println!("FEHLER {e}");
+            std::process::exit(1);
+        }
+        if !s.newer {
+            println!("Kein Update nötig.");
+            return Ok(());
+        }
+        match update::install() {
+            Ok(v) => println!("Version {v} eingespielt."),
+            Err(e) => {
+                println!("FEHLER {e:#}");
+                std::process::exit(1);
+            }
+        }
         return Ok(());
     }
     // Avatar-Datei ohne Fenster laden und berichten (für Tests und zur Fehlersuche bei fremden Dateien)

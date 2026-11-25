@@ -31,6 +31,22 @@ enum Pending {
     Close,
     New,
     Open(PathBuf),
+    /// Update einspielen und neu starten
+    Update,
+}
+
+/// Stand der Update-Prüfung
+#[derive(Default)]
+struct Updates {
+    status: Option<crate::update::Status>,
+    checking: Option<Receiver<crate::update::Status>>,
+    installing: Option<Receiver<anyhow::Result<String>>>,
+    /// „Später“ gedrückt: Balken bis zur nächsten neuen Version ausblenden
+    dismissed: Option<String>,
+    /// Von Hand angestoßen: dann auch „schon aktuell“ melden
+    manual: bool,
+    last_check: Option<std::time::Instant>,
+    message: Option<String>,
 }
 
 pub struct StoffwerkApp {
@@ -56,6 +72,8 @@ pub struct StoffwerkApp {
     collider: Option<Collider>,
     playing: bool,
     pointer_over_2d: bool,
+    updates: Updates,
+    started: std::time::Instant,
     /// Zuletzt in 3D markiertes Schnittteil (für die gelbe Markierung)
     cloth_selected: Option<u64>,
     /// Angeklickter Teil des Avatars (gelb markiert)
@@ -110,6 +128,8 @@ impl StoffwerkApp {
             collider: None,
             playing: false,
             pointer_over_2d: false,
+            updates: Updates::default(),
+            started: std::time::Instant::now(),
             cloth_selected: None,
             avatar_selected: false,
             loading: None,
@@ -232,6 +252,7 @@ impl StoffwerkApp {
                 self.remove_avatar(ctx);
                 self.editor.dirty = false;
             }
+            Pending::Update => self.start_install(ctx),
             Pending::Open(path) => match schnitt::load(&path) {
                 Ok((doc, avatar, opts)) => {
                     self.doc = doc;
@@ -254,6 +275,156 @@ impl StoffwerkApp {
                 Err(e) => self.error = Some(format!("{e:#}")),
             },
         }
+    }
+
+    // ------------------------------------------------------------ Updates
+
+    fn check_updates(&mut self, ctx: &egui::Context, manual: bool) {
+        if self.updates.checking.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::update::check());
+            ctx.request_repaint();
+        });
+        self.updates.checking = Some(rx);
+        self.updates.manual = manual;
+        self.updates.last_check = Some(std::time::Instant::now());
+    }
+
+    fn start_install(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::update::install());
+            ctx.request_repaint();
+        });
+        self.updates.installing = Some(rx);
+        self.updates.message = Some("Update wird geladen und geprüft …".into());
+    }
+
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        // Kurz nach dem Start nachsehen, danach alle sechs Stunden
+        let due = match self.updates.last_check {
+            None => self.started.elapsed().as_secs() >= 4,
+            Some(t) => t.elapsed().as_secs() >= 6 * 3600,
+        };
+        if due && std::env::var_os("STOFFWERK_KEINE_UPDATES").is_none() {
+            self.check_updates(ctx, false);
+        }
+        // Ohne Eingaben zeichnet egui nicht neu: zum nächsten Prüfzeitpunkt ausdrücklich aufwachen
+        let next = match self.updates.last_check {
+            None => std::time::Duration::from_secs(4).saturating_sub(self.started.elapsed()),
+            Some(t) => std::time::Duration::from_secs(6 * 3600).saturating_sub(t.elapsed()),
+        };
+        ctx.request_repaint_after(next.max(std::time::Duration::from_millis(100)));
+        if let Some(rx) = &self.updates.checking {
+            if let Ok(s) = rx.try_recv() {
+                self.updates.checking = None;
+                if self.updates.manual && !s.newer {
+                    let text = match (&s.error, &s.pending) {
+                        (Some(e), _) => format!("Keine Verbindung zu GitHub: {e}"),
+                        (None, Some(v)) => format!("Version {v} wird gerade bereitgestellt – in ein paar Minuten noch einmal nachsehen."),
+                        _ => format!("Du hast die neueste Version ({}).", s.installed),
+                    };
+                    self.updates.message = Some(text);
+                }
+                if s.newer {
+                    self.updates.message = None;
+                }
+                self.updates.status = Some(s);
+            }
+        }
+        if let Some(rx) = &self.updates.installing {
+            if let Ok(result) = rx.try_recv() {
+                self.updates.installing = None;
+                match result {
+                    Ok(v) => {
+                        self.updates.message = Some(format!("Version {v} ist eingespielt – Stoffwerk startet neu …"));
+                        ctx.request_repaint();
+                        // Einen Moment stehen lassen, damit die Meldung zu sehen ist
+                        std::thread::spawn(|| {
+                            std::thread::sleep(std::time::Duration::from_millis(1500));
+                            crate::update::restart();
+                        });
+                    }
+                    Err(e) => self.updates.message = Some(format!("Update fehlgeschlagen: {e:#}")),
+                }
+            }
+        }
+        if self.updates.checking.is_some() || self.updates.installing.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
+    /// Grüner Balken unter dem Menü, wenn es eine neue Version gibt
+    fn update_bar(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let show_new = self
+            .updates
+            .status
+            .as_ref()
+            .is_some_and(|s| s.newer && self.updates.dismissed.as_deref() != s.available.as_deref());
+        if !show_new && self.updates.message.is_none() {
+            return;
+        }
+        let green = Color32::from_rgb(27, 94, 32);
+        egui::Panel::top("update").frame(egui::Frame::NONE.fill(Color32::from_rgb(232, 245, 233)).inner_margin(egui::Margin::symmetric(10, 5))).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if let Some(msg) = self.updates.message.clone() {
+                    if self.updates.installing.is_some() {
+                        ui.spinner();
+                    }
+                    ui.label(RichText::new(msg).color(green).strong());
+                    if self.updates.installing.is_none() && !show_new {
+                        if ui.add(egui::Button::new(RichText::new("OK").color(green)).fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, green))).clicked() {
+                            self.updates.message = None;
+                        }
+                        return;
+                    }
+                    if !show_new {
+                        return;
+                    }
+                    ui.separator();
+                }
+                let s = self.updates.status.clone().unwrap_or_default();
+                if self.updates.message.is_none() {
+                    ui.label(
+                        RichText::new(format!(
+                            "Neue Version {} verfügbar (installiert {})",
+                            s.available.clone().unwrap_or_default(),
+                            s.installed
+                        ))
+                        .color(green)
+                        .strong(),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new(RichText::new("Später").color(green)).fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, green))).clicked() {
+                        self.updates.dismissed = s.available.clone();
+                        self.updates.message = None;
+                    }
+                    if s.updatable {
+                        let busy = self.updates.installing.is_some();
+                        if ui
+                            .add_enabled(
+                                !busy,
+                                egui::Button::new(RichText::new("Jetzt aktualisieren").color(green).strong())
+                                    .fill(Color32::WHITE)
+                                    .stroke(egui::Stroke::new(1.0, green)),
+                            )
+                            .clicked()
+                        {
+                            self.request(&ctx, Pending::Update);
+                        }
+                    } else {
+                        ui.label(RichText::new("selbst gebaut: mit git holen").color(green).small());
+                    }
+                });
+            });
+        });
     }
 
     fn open_project_dialog(&mut self, ctx: &egui::Context) {
@@ -460,6 +631,11 @@ impl StoffwerkApp {
                 }
             });
             ui.menu_button("Hilfe", |ui| {
+                if ui.button("Nach Updates suchen").clicked() {
+                    self.check_updates(&ctx, true);
+                    self.updates.message = Some("Suche nach Updates …".into());
+                    ui.close();
+                }
                 if ui.button("Über Stoffwerk").clicked() {
                     self.show_about = true;
                 }
@@ -1090,6 +1266,8 @@ impl eframe::App for StoffwerkApp {
         self.update_cloth(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| self.menu(ui));
+        self.poll_updates(&ctx);
+        self.update_bar(ui);
         egui::Panel::bottom("status").show(ui, |ui| self.status(ui));
 
         // Aufteilung wie gewohnt: 3D links, 2D-Schnitt in der Mitte, Objekte und Eigenschaften rechts

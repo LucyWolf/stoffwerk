@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.11
+
+**Updates aus dem Programm heraus**
+- Stoffwerk sieht kurz nach dem Start und danach alle sechs Stunden auf GitHub nach, ob es eine neuere Version gibt. Wenn ja, erscheint unter dem Menü ein grüner Balken mit „Jetzt aktualisieren“ und „Später“. Von Hand geht es über Hilfe > Nach Updates suchen.
+- „Jetzt aktualisieren“ lädt die neue Fassung und prüft sie gegen die Prüfsumme am Release. Passt sie nicht, wird nichts eingespielt.
+  - Linux: Die Programmdatei wird ersetzt, Stoffwerk startet neu.
+  - Windows: Das Setup läuft still im Hintergrund und startet Stoffwerk danach neu.
+- Ist der Schnitt nicht gespeichert, kommt vorher die bekannte Rückfrage.
+- Neue Versionen werden erst angeboten, wenn ihre Datei am Release hängt. Das Windows-Setup kommt ein paar Minuten nach dem Release dazu.
+- `stoffwerk --update` macht dasselbe ohne Fenster, für den Fall, dass das Fenster nicht startet.
+
+**Linux-Installer lief ins Leere** (bis 0.1.10)
+- Der Doppelklick-Installer lädt aus „neueste Version“ auf GitHub. Alle 0.x-Releases waren als Vorabversion markiert, und die zählt GitHub dort nicht mit. Der Download endete mit 404, und die Installation brach ab. Releases werden jetzt normal veröffentlicht, v0.1.10 ist nachträglich umgestellt.
+
+**Geprüft**
+- Linux: Eine als 0.1.0 gebaute Fassung hat 0.1.10 von GitHub geholt, die Prüfsumme bestätigt, sich ersetzt und neu gestartet, sowohl im Fenster als auch mit `--update`.
+- Dabei aufgefallen und behoben: Nach dem Austausch zeigte der eigene Programmpfad auf die gelöschte alte Datei. Stoffwerk beendete sich deshalb, statt neu zu starten.
+- Windows ist nicht getestet. Der Ablauf (stilles Setup, Neustart) ist derselbe wie bei Notizmappe und DL24 Akkutest.
+
 ## 0.1.10
 
 **Fell, Schnurrhaare und Ohrspitzen stachen durch den Stoff**
